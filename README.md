@@ -101,6 +101,32 @@ On an open failure, `open` closes the failed SQLite handle and clears the
 output pointer when cleanup succeeds. An existing nonempty output handle is
 rejected and left with its owner.
 
+## Binary values, bounded reads and backups
+
+`SQLite_Value` also accepts `[]u8`; binding borrows its bytes through the statement.
+`column_blob(statement, column, allocator)` copies binary bytes into the caller's
+allocator before finalization, preserving embedded NULs and empty blobs. NULL is
+rejected as `.MISMATCH`, consistent with required text/integer readers.
+
+`begin_read` retains the connection mutex like `begin_immediate`, using a deferred
+read transaction. Both terminal APIs consume that successful begin's ownership
+once, including after SQLite automatically aborts a transaction. A failed commit
+rolls back only when SQLite still reports an active transaction.
+
+`query_many` requires `1 <= max_rows <= QUERY_ROWS_LIMIT` (100,000); the default
+remains 1,000. Initial capacity and growth never exceed the requested bound. An
+excess row returns `.TOOBIG` without partial rows. Rows and decoded temporary
+fields retain their caller-owned temporary allocator lifetime. Prepare, bind,
+step, decode, allocation and finalization failures return typed errors; distinct
+cleanup errors survive alongside the primary failure.
+
+`backup_file(database, path)` creates a new file with mode 0600 and copies a
+consistent snapshot through SQLite's online backup API, including WAL contents.
+It never replaces an existing destination. Copying uses 256-page batches and a
+10-second deadline; failed copies are removed and cleanup failures are logged.
+Readers must wait for a successful return before consuming the destination.
+The caller keeps the source connection alive until backup returns.
+
 ## Development
 
 Install this repository at `$(odin root)/shared/kakunou`. Projects can then

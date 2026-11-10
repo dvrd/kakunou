@@ -1,6 +1,7 @@
 package sqlite
 
 import "core:strings"
+import "core:mem"
 
 Column_Type :: enum {
 	Integer,
@@ -145,22 +146,26 @@ create_table :: proc(
 	sql, err = build_new_table_sql(schema, if_not_exists)
 	if err.kind != .None do return
 
-	defer {
-		if free_err := delete(sql); free_err != nil {
-			if err.kind == .None {
-				err = make_error(
-					.Allocation_Failed,
-					"Could not free table SQL",
-					table = schema.name,
-				)
-			}
-
-			err.allocator_error = free_err
-		}
-	}
 
 	err = execute_sql(database, sql)
 	if err.kind != .None do copy(err.table[:len(err.table) - 1], schema.name)
+	// Error metadata must be attached before returning; defer observes a copy.
+	if free_error := release_owned_cstring(sql); free_error != nil {
+		if err.kind == .None {
+			err = make_error(.Allocation_Failed, "Could not free table SQL", table = schema.name)
+		}
+		err.allocator_error = free_error
+	}
 
 	return
+}
+
+// Region allocators deliberately release storage through their owner, not per
+// object. Propagate real free failures while retaining request-arena semantics.
+release_owned_cstring :: proc(value: cstring) -> mem.Allocator_Error {
+	error := delete(value)
+	if error == .Mode_Not_Implemented && .Free_All in mem.query_features(context.allocator) {
+		return nil
+	}
+	return error
 }

@@ -46,7 +46,7 @@ make_error :: proc(
 
 // The returned string borrows the supplied error's buffer.
 error_text :: proc(buffer: []u8) -> string {
-	text := string(buffer)
+	text := cast(string)(buffer)
 	if end := strings.index_byte(text, 0); end >= 0 do text = text[:end]
 
 	return text
@@ -58,7 +58,8 @@ log_error :: proc(err: Database_Error, operation := "Database operation failed")
 	diagnostic := err
 
 	log.errorf(
-		"%s | kind=%v path=%s table=%s sqlite_code=%v allocator_error=%v cleanup_code=%v message=%s",
+		"%s | kind=%v path=%s table=%s sqlite_code=%v " +
+		"allocator_error=%v cleanup_code=%v message=%s",
 		operation,
 		err.kind,
 		error_text(diagnostic.path[:]),

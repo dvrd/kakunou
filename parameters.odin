@@ -2,13 +2,12 @@ package sqlite
 
 import "core:fmt"
 
-// Values are borrowed until the statement is finalized by its caller.
 bind_parameters :: proc(
 	database: ^SQLite_DB,
 	statement: ^SQLite_Statement,
 	parameters: []SQLite_Value,
 ) -> Database_Error {
-	expected := int(sqlite3_bind_parameter_count(statement))
+	expected := cast(int)(sqlite3_bind_parameter_count(statement))
 	if len(parameters) != expected {
 		err := make_error(.Execution_Failed, "", sqlite_code = .RANGE)
 		fmt.bprintf(
@@ -25,10 +24,23 @@ bind_parameters :: proc(
 		result: SQLite_Result
 
 		switch value in parameter {
+		case []u8:
+			if len(value) > cast(int)max(i32) {
+				return make_error(
+					.Execution_Failed, "Blob exceeds SQLite limit", sqlite_code = .TOOBIG,
+				)
+			}
+			data := raw_data(value)
+			if len(value) == 0 {
+				data = raw_data(cast(string)"\x00")
+			}
+			result = sqlite3_bind_blob(
+				statement, cast(i32)(index + 1), data, cast(i32)len(value), nil,
+			)
 		case i64:
-			result = sqlite3_bind_int64(statement, i32(index + 1), value)
+			result = sqlite3_bind_int64(statement, cast(i32)(index + 1), value)
 		case cstring:
-			result = sqlite3_bind_text(statement, i32(index + 1), value, -1, nil)
+			result = sqlite3_bind_text(statement, cast(i32)(index + 1), value, -1, nil)
 		case:
 			return make_error(
 				.Execution_Failed,
@@ -40,7 +52,7 @@ bind_parameters :: proc(
 		if result != .OK {
 			return make_error(
 				.Execution_Failed,
-				string(sqlite3_errmsg(database)),
+				cast(string)(sqlite3_errmsg(database)),
 				sqlite_code = result,
 			)
 		}

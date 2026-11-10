@@ -45,6 +45,7 @@ SQLite_Result :: enum i32 {
 }
 
 SQLite_Value :: union {
+	[]u8,
 	i64,
 	cstring,
 }
@@ -62,21 +63,55 @@ SQLITE_OPEN_CREATE :: 0x00000004
 SQLITE_OPEN_FULLMUTEX :: 0x00010000
 
 foreign sqlite {
+	sqlite3_busy_timeout :: proc "c" (database: ^SQLite_DB, milliseconds: i32) -> SQLite_Result ---
+	sqlite3_changes :: proc "c" (database: ^SQLite_DB) -> i32 ---
 	sqlite3_db_mutex :: proc "c" (database: ^SQLite_DB) -> ^SQLite_Mutex ---
 	sqlite3_mutex_enter :: proc "c" (mutex: ^SQLite_Mutex) ---
 	sqlite3_mutex_leave :: proc "c" (mutex: ^SQLite_Mutex) ---
 
-	sqlite3_open_v2 :: proc "c" (filename: cstring, database: ^^SQLite_DB, flags: i32, vfs: cstring) -> SQLite_Result ---
+	sqlite3_open_v2 :: proc "c" (
+		filename: cstring,
+		database: ^^SQLite_DB,
+		flags: i32,
+		vfs: cstring,
+	) -> SQLite_Result ---
 
 	sqlite3_close :: proc "c" (database: ^SQLite_DB) -> SQLite_Result ---
 
 	sqlite3_errmsg :: proc "c" (database: ^SQLite_DB) -> cstring ---
+	sqlite3_get_autocommit :: proc "c" (database: ^SQLite_DB) -> i32 ---
 
-	sqlite3_prepare_v2 :: proc "c" (database: ^SQLite_DB, sql: cstring, byte_count: i32, statement: ^^SQLite_Statement, tail: ^cstring) -> SQLite_Result ---
+	sqlite3_prepare_v2 :: proc "c" (
+		database: ^SQLite_DB,
+		sql: cstring,
+		byte_count: i32,
+		statement: ^^SQLite_Statement,
+		tail: ^cstring,
+	) -> SQLite_Result ---
 
-	sqlite3_bind_text :: proc "c" (statement: ^SQLite_Statement, index: i32, value: cstring, byte_count: i32, destructor: proc "c" (data: rawptr)) -> SQLite_Result ---
+	sqlite3_bind_text :: proc "c" (
+		statement: ^SQLite_Statement,
+		index: i32,
+		value: cstring,
+		byte_count: i32,
+		destructor: proc "c" (data: rawptr),
+	) -> SQLite_Result ---
 
-	sqlite3_bind_int64 :: proc "c" (statement: ^SQLite_Statement, index: i32, value: i64) -> SQLite_Result ---
+	sqlite3_bind_blob :: proc "c" (
+		statement: ^SQLite_Statement,
+		index: i32,
+		value: rawptr,
+		byte_count: i32,
+		destructor: rawptr,
+	) -> SQLite_Result ---
+
+	sqlite3_column_blob :: proc "c" (statement: ^SQLite_Statement, column: i32) -> rawptr ---
+
+	sqlite3_bind_int64 :: proc "c" (
+		statement: ^SQLite_Statement,
+		index: i32,
+		value: i64,
+	) -> SQLite_Result ---
 
 	sqlite3_bind_parameter_count :: proc "c" (statement: ^SQLite_Statement) -> i32 ---
 
@@ -86,13 +121,27 @@ foreign sqlite {
 
 	sqlite3_column_bytes :: proc "c" (statement: ^SQLite_Statement, column: i32) -> i32 ---
 
-	sqlite3_column_type :: proc "c" (statement: ^SQLite_Statement, column: i32) -> SQLite_Column_Type ---
+	sqlite3_column_type :: proc "c" (
+		statement: ^SQLite_Statement,
+		column: i32,
+	) -> SQLite_Column_Type ---
 
 	sqlite3_column_count :: proc "c" (statement: ^SQLite_Statement) -> i32 ---
 
 	sqlite3_step :: proc "c" (statement: ^SQLite_Statement) -> SQLite_Result ---
 
-	sqlite3_exec :: proc "c" (database: ^SQLite_DB, sql: cstring, callback: proc "c" (data: rawptr, coulmn_count: i32, values: [^]cstring, names: [^]cstring) -> SQLite_Result, data: rawptr, error_message: ^cstring) -> SQLite_Result ---
+	sqlite3_exec :: proc "c" (
+		database: ^SQLite_DB,
+		sql: cstring,
+		callback: proc "c" (
+			data: rawptr,
+			coulmn_count: i32,
+			values: [^]cstring,
+			names: [^]cstring,
+		) -> SQLite_Result,
+		data: rawptr,
+		error_message: ^cstring,
+	) -> SQLite_Result ---
 
 	sqlite3_finalize :: proc "c" (statement: ^SQLite_Statement) -> SQLite_Result ---
 
@@ -121,7 +170,7 @@ open :: proc(database: ^^SQLite_DB, path: cstring) -> Database_Error {
 			.Open_Failed,
 			"Database output must be empty",
 			sqlite_code = .MISUSE,
-			path = string(path),
+			path = cast(string)(path),
 		)
 	}
 
@@ -136,14 +185,14 @@ open :: proc(database: ^^SQLite_DB, path: cstring) -> Database_Error {
 	if result != .OK || mutex_missing {
 		message := "Could not allocate database connection"
 		if database^ != nil {
-			message = string(sqlite3_errmsg(database^))
+			message = cast(string)(sqlite3_errmsg(database^))
 		}
 
 		if mutex_missing {
 			message = "SQLite connection serialization is required"
 			result = .MISUSE
 		}
-		err := make_error(.Open_Failed, message, sqlite_code = result, path = string(path))
+		err := make_error(.Open_Failed, message, sqlite_code = result, path = cast(string)(path))
 
 		if database^ != nil {
 			err.cleanup_code = sqlite3_close(database^)
@@ -179,7 +228,7 @@ execute_sql_unlocked :: proc(database: ^SQLite_DB, sql: cstring) -> Database_Err
 	if result != .OK {
 		return make_error(
 			.Execution_Failed,
-			string(sqlite3_errmsg(database)),
+			cast(string)(sqlite3_errmsg(database)),
 			sqlite_code = result,
 		)
 	}
@@ -187,7 +236,8 @@ execute_sql_unlocked :: proc(database: ^SQLite_DB, sql: cstring) -> Database_Err
 	return {}
 }
 
-// Holds the connection mutex until commit_transaction or rollback_transaction.
+// Successful BEGIN transfers one recursive connection-mutex hold to the caller.
+// The caller must finish exactly once with commit_transaction or rollback_transaction.
 // A failed BEGIN releases only this call's hold; the caller's transaction is untouched.
 begin_immediate :: proc(database: ^SQLite_DB) -> Database_Error {
 	mutex := connection_mutex(database)
@@ -197,16 +247,41 @@ begin_immediate :: proc(database: ^SQLite_DB) -> Database_Error {
 	return err
 }
 
-// Releases the hold taken by begin_immediate. A failed COMMIT is rolled back before the release.
+// Successful read BEGIN has the same ownership contract as begin_immediate:
+// keep its mutex hold until exactly one commit_transaction or rollback_transaction.
+begin_read :: proc(database: ^SQLite_DB) -> Database_Error {
+	mutex := connection_mutex(database)
+	sqlite3_mutex_enter(mutex)
+	err := execute_sql_unlocked(database, "BEGIN")
+	if err.kind != .None {
+		sqlite3_mutex_leave(mutex)
+	}
+	return err
+}
+
+// Consumes the transaction hold on BOTH success and failure. Failed COMMIT is
+// rolled back internally before releasing the mutex. Callers must clear their
+// transaction-owned flag before this call and must never roll back its failure.
 commit_transaction :: proc(database: ^SQLite_DB) -> Database_Error {
 	err := execute_sql_unlocked(database, "COMMIT;")
-	if err.kind != .None do _ = execute_sql_unlocked(database, "ROLLBACK;")
+	if err.kind != .None && (database==nil || sqlite3_get_autocommit(database)==0) {
+		cleanup := execute_sql_unlocked(database, "ROLLBACK;")
+		if cleanup.kind != .None do err.cleanup_code = cleanup.sqlite_code
+	}
 	sqlite3_mutex_leave(connection_mutex(database))
 	return err
 }
 
+// Consumes a still-owned BEGIN hold exactly once. This void API logs cleanup
+// failures because it cannot attach them to a caller's primary operational error.
 rollback_transaction :: proc(database: ^SQLite_DB) {
-	_ = execute_sql_unlocked(database, "ROLLBACK;")
+	// Statement errors may already have rolled SQLite back. The caller still
+	// owns its connection-mutex hold, which this terminal call consumes once.
+	if database==nil || sqlite3_get_autocommit(database)==0 {
+		if err:=execute_sql_unlocked(database,"ROLLBACK;");err.kind!=.None {
+			log_error(err,"Could not roll back transaction")
+		}
+	}
 	sqlite3_mutex_leave(connection_mutex(database))
 }
 
@@ -218,6 +293,25 @@ last_insert_rowid :: proc(database: ^SQLite_DB) -> i64 {
 	return sqlite3_last_insert_rowid(database)
 }
 
+// Finalize before taking a return-value snapshot. Odin defers cannot modify a
+// returned error, so cleanup diagnostics must be attached in explicit control flow.
+statement_finalize :: proc(
+	statement: ^SQLite_Statement,
+	error: ^Database_Error,
+	message: string,
+) -> bool {
+	assert(error != nil)
+	if statement == nil do return true
+	code := sqlite3_finalize(statement)
+	if code == .OK do return true
+	if error.kind == .None {
+		error^ = make_error(.Execution_Failed, message, sqlite_code = code)
+	} else if code != error.sqlite_code {
+		error.cleanup_code = code
+	}
+	return false
+}
+
 // A missing row is successful. Callers own logging and must ignore output on error.
 query_one :: proc(
 	database: ^SQLite_DB,
@@ -225,54 +319,46 @@ query_one :: proc(
 	parameters: []SQLite_Value,
 	output: ^$T,
 	decode: proc(statement: ^SQLite_Statement, output: ^T) -> Database_Error,
-) -> (
-	found: bool,
-	err: Database_Error,
-) {
+) -> (found: bool, err: Database_Error) {
+	if database == nil || sql == nil || output == nil || decode == nil {
+		return false, make_error(
+			.Execution_Failed, "Invalid query arguments", sqlite_code = .MISUSE,
+		)
+	}
 	mutex := connection_mutex(database)
 	sqlite3_mutex_enter(mutex)
 	defer sqlite3_mutex_leave(mutex)
-	if database == nil || sql == nil || output == nil || decode == nil {
-		err = make_error(.Execution_Failed, "Invalid query arguments", sqlite_code = .MISUSE)
-		return
-	}
 	statement: ^SQLite_Statement
 	result := sqlite3_prepare_v2(database, sql, -1, &statement, nil)
-	defer {
-		if statement != nil {
-			code := sqlite3_finalize(statement)
-			if code != .OK {
-				if err.kind == .None {
-					err = make_error(
-						.Execution_Failed,
-						"Could not finalize query",
-						sqlite_code = code,
-					)
-				} else if code != err.sqlite_code {
-					err.cleanup_code = code
-				}
-				found = false
-			}
-		}
-	}
 	if result != .OK {
-		err = make_error(.Execution_Failed, string(sqlite3_errmsg(database)), sqlite_code = result)
-		return
-	}
-	if statement == nil {
+		err = make_error(
+			.Execution_Failed, cast(string)sqlite3_errmsg(database), sqlite_code = result,
+		)
+	} else if statement == nil {
 		err = make_error(.Execution_Failed, "Empty query", sqlite_code = .MISUSE)
-		return
+	} else {
+		found, err = query_one_row(database, statement, parameters, output, decode)
 	}
-	err = bind_parameters(database, statement, parameters)
-	if err.kind != .None do return
-	result = sqlite3_step(statement)
-	if result == .DONE do return
-	if result != .ROW {
-		err = make_error(.Execution_Failed, string(sqlite3_errmsg(database)), sqlite_code = result)
-		return
-	}
-	err = decode(statement, output)
-	if err.kind != .None do return
-	found = true
+	if !statement_finalize(statement, &err, "Could not finalize query") do found = false
 	return
+}
+
+query_one_row :: proc(
+	database: ^SQLite_DB,
+	statement: ^SQLite_Statement,
+	parameters: []SQLite_Value,
+	output: ^$T,
+	decode: proc(statement: ^SQLite_Statement, output: ^T) -> Database_Error,
+) -> (bool, Database_Error) {
+	error := bind_parameters(database, statement, parameters)
+	if error.kind != .None do return false, error
+	result := sqlite3_step(statement)
+	if result == .DONE do return false, {}
+	if result != .ROW {
+		return false, make_error(
+			.Execution_Failed, cast(string)sqlite3_errmsg(database), sqlite_code = result,
+		)
+	}
+	error = decode(statement, output)
+	return error.kind == .None, error
 }
