@@ -113,7 +113,6 @@ foreign sqlite {
 
 // SQLite owns this recursive mutex for the lifetime of a FULLMUTEX connection.
 // A nil mutex is a no-op for SQLite's enter/leave routines, preserving nil-handle errors.
-@(private)
 connection_mutex :: proc(database: ^SQLite_DB) -> ^SQLite_Mutex {
 	if database == nil {
 		return nil
@@ -132,7 +131,7 @@ open :: proc(database: ^^SQLite_DB, path: cstring) -> Database_Error {
 			.Open_Failed,
 			"Database output must be empty",
 			sqlite_code = .MISUSE,
-			path = cast(string)(path),
+			subject = cast(string)(path),
 		)
 	}
 
@@ -152,7 +151,7 @@ open :: proc(database: ^^SQLite_DB, path: cstring) -> Database_Error {
 			result = .MISUSE
 		}
 
-		err := make_error(.Open_Failed, message, sqlite_code = result, path = cast(string)(path))
+		err := make_error(.Open_Failed, message, sqlite_code = result, subject = cast(string)(path))
 
 		if database^ != nil {
 			err.cleanup_code = sqlite3_close(database^)
@@ -190,7 +189,7 @@ execute_sql_unlocked :: proc(database: ^SQLite_DB, sql: cstring) -> Database_Err
 	result := sqlite3_exec(database, sql, nil, nil, nil)
 
 	if result != .OK {
-		return make_error(.Execution_Failed, cast(string)(sqlite3_errmsg(database)), sqlite_code = result)
+		return sqlite_failure(database, result)
 	}
 
 	return {}
@@ -208,7 +207,6 @@ begin_read :: proc(database: ^SQLite_DB) -> Database_Error {
 	return begin(database, "BEGIN")
 }
 
-@(private)
 begin :: proc(database: ^SQLite_DB, sql: cstring) -> Database_Error {
 	mutex := connection_mutex(database)
 	sqlite3_mutex_enter(mutex)
@@ -265,7 +263,6 @@ last_insert_rowid :: proc(database: ^SQLite_DB) -> i64 {
 
 // Caller holds the connection mutex. A nil statement with no error means the
 // SQL held no statement; empty names that case in the returned error.
-@(private)
 prepare :: proc(
 	database: ^SQLite_DB,
 	sql: cstring,
@@ -276,7 +273,7 @@ prepare :: proc(
 ) {
 	result := sqlite3_prepare_v2(database, sql, -1, &statement, nil)
 	if result != .OK {
-		err = make_error(.Execution_Failed, cast(string)sqlite3_errmsg(database), sqlite_code = result)
+		err = sqlite_failure(database, result)
 	} else if statement == nil {
 		err = make_error(.Execution_Failed, empty, sqlite_code = .MISUSE)
 	}
@@ -351,7 +348,7 @@ query_one_row :: proc(
 		return false, {}
 	}
 	if result != .ROW {
-		return false, make_error(.Execution_Failed, cast(string)sqlite3_errmsg(database), sqlite_code = result)
+		return false, sqlite_failure(database, result)
 	}
 	error = decode(statement, output)
 	return error.kind == .None, error
@@ -365,16 +362,21 @@ Database_Error_Kind :: enum {
 	Execution_Failed,
 }
 
-// Diagnostic text is owned by the error and survives SQLite cleanup and copying.
-// Buffers include a trailing NUL; longer diagnostic text is truncated.
+ERROR_MESSAGE_CAPACITY :: 192
+ERROR_SUBJECT_CAPACITY :: 96
+
+// Diagnostic text lives inline in the error: no heap, no borrowed pointers, so
+// copies outlive SQLite cleanup and the caller's strings. `message` is the
+// explanation; `subject` names the table or file the failure concerns. Both
+// include a trailing NUL and truncate longer text. The struct stays near 300
+// bytes; read the text with error_message/error_subject.
 Database_Error :: struct {
 	kind:            Database_Error_Kind,
 	sqlite_code:     SQLite_Result,
 	allocator_error: mem.Allocator_Error,
 	cleanup_code:    SQLite_Result,
-	message:         [512]u8,
-	path:            [1024]u8,
-	table:           [256]u8,
+	message:         [ERROR_MESSAGE_CAPACITY]u8,
+	subject:         [ERROR_SUBJECT_CAPACITY]u8,
 }
 
 make_error :: proc(
@@ -382,8 +384,7 @@ make_error :: proc(
 	message: string,
 	sqlite_code: SQLite_Result = .OK,
 	allocator_error: mem.Allocator_Error = nil,
-	path: string = "",
-	table: string = "",
+	subject: string = "",
 ) -> Database_Error {
 	err := Database_Error {
 		kind            = kind,
@@ -391,10 +392,24 @@ make_error :: proc(
 		allocator_error = allocator_error,
 	}
 	copy(err.message[:len(err.message) - 1], message)
-	copy(err.path[:len(err.path) - 1], path)
-	copy(err.table[:len(err.table) - 1], table)
+	copy(err.subject[:len(err.subject) - 1], subject)
 
 	return err
+}
+
+// SQLite's message is only valid until the next call on the connection, so it
+// is copied into the error immediately.
+sqlite_failure :: proc(database: ^SQLite_DB, code: SQLite_Result) -> Database_Error {
+	return make_error(.Execution_Failed, cast(string)sqlite3_errmsg(database), sqlite_code = code)
+}
+
+// The returned strings borrow the supplied error.
+error_message :: proc(err: ^Database_Error) -> string {
+	return error_text(err.message[:])
+}
+
+error_subject :: proc(err: ^Database_Error) -> string {
+	return error_text(err.subject[:])
 }
 
 // The returned string borrows the supplied error's buffer.
@@ -415,14 +430,13 @@ log_error :: proc(err: Database_Error, operation := "Database operation failed")
 	diagnostic := err
 
 	log.errorf(
-		"%s | kind=%v path=%s table=%s sqlite_code=%v " + "allocator_error=%v cleanup_code=%v message=%s",
+		"%s | kind=%v subject=%s sqlite_code=%v allocator_error=%v cleanup_code=%v message=%s",
 		operation,
 		err.kind,
-		error_text(diagnostic.path[:]),
-		error_text(diagnostic.table[:]),
+		error_subject(&diagnostic),
 		err.sqlite_code,
 		err.allocator_error,
 		err.cleanup_code,
-		error_text(diagnostic.message[:]),
+		error_message(&diagnostic),
 	)
 }

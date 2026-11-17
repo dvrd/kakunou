@@ -254,11 +254,11 @@ database_helpers_return_errors_without_logging :: proc(t: ^testing.T) {
 
 	err := db.create_table(database, db.Table_Schema{name = "broken"})
 	testing.expect(t, err.kind == .Invalid_Schema, "invalid schema is distinguished from SQLite failure")
-	testing.expect(t, db.error_text(err.table[:]) == "broken", "table context survives propagation")
+	testing.expect(t, db.error_subject(&err) == "broken", "table context survives propagation")
 
 	err = db.execute_sql(database, "INSERT INTO missing VALUES (1);")
 	testing.expect(t, err.kind == .Execution_Failed && err.sqlite_code == .ERROR, "original SQLite code is returned")
-	testing.expect(t, len(db.error_text(err.message[:])) > 0, "SQLite explanation is retained")
+	testing.expect(t, len(db.error_message(&err)) > 0, "SQLite explanation is retained")
 
 	err = db.create_table(nil, db.Table_Schema{name = "items", columns = {{name = "id", data_type = .Integer}}})
 	testing.expect(
@@ -387,7 +387,7 @@ table_schema_quotes_names_and_supports_explicit_creation :: proc(t: ^testing.T) 
 		err.kind == .Execution_Failed && err.sqlite_code == .ERROR,
 		"explicit creation returns SQLite failure",
 	)
-	testing.expect(t, db.error_text(err.table[:]) == schema.name, "table context is attached to SQLite error")
+	testing.expect(t, db.error_subject(&err) == schema.name, "table context is attached to SQLite error")
 	testing.expect(t, capture.error_count == 0, "duplicate table error is returned without logging")
 }
 
@@ -429,4 +429,27 @@ table_schema_rejects_invalid_definitions_and_allocation_failure :: proc(t: ^test
 	testing.expect(t, err.kind == .Allocation_Failed && sql == nil, "allocation failure produces no SQL")
 	testing.expect(t, err.allocator_error == .Out_Of_Memory, "underlying allocation error is preserved")
 	testing.expect(t, capture.error_count == 0, "allocation failure is returned without logging")
+}
+
+@(test)
+database_error_is_small_and_truncates_text :: proc(t: ^testing.T) {
+	testing.expect(t, size_of(db.Database_Error) <= 320, "error stays small enough to return by value")
+
+	long_text := make([]u8, 2048)
+	defer delete(long_text)
+
+	for &value in long_text {
+		value = 'x'
+	}
+
+	err := db.make_error(.Execution_Failed, string(long_text), sqlite_code = .ERROR, subject = string(long_text))
+	testing.expect_value(t, len(db.error_message(&err)), db.ERROR_MESSAGE_CAPACITY - 1)
+	testing.expect_value(t, len(db.error_subject(&err)), db.ERROR_SUBJECT_CAPACITY - 1)
+
+	copied := err
+	testing.expect_value(t, db.error_message(&copied), db.error_message(&err))
+
+	short := db.make_error(.Open_Failed, "short", subject = "path/to/file")
+	testing.expect_value(t, db.error_message(&short), "short")
+	testing.expect_value(t, db.error_subject(&short), "path/to/file")
 }

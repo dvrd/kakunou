@@ -155,7 +155,7 @@ query_many_finalizes_prepare_bind_step_and_decoder_failure_paths :: proc(t: ^tes
 	rows, error := db.query_many(database, "SELECT 1", nil, decode_failure)
 	testing.expect(t, rows == nil)
 	testing.expect_value(t, error.sqlite_code, .MISMATCH)
-	testing.expect_value(t, db.error_text(error.message[:]), "Decoder failure")
+	testing.expect_value(t, db.error_message(&error), "Decoder failure")
 	test_database_count(t, database, "SELECT COUNT(*) FROM items", 0)
 }
 
@@ -180,7 +180,7 @@ query_many_retains_finalize_error_alongside_the_primary_decoder_failure :: proc(
 	testing.expect(t, rows == nil)
 	testing.expect_value(t, error.sqlite_code, .MISMATCH)
 	testing.expect_value(t, error.cleanup_code, .ERROR)
-	testing.expect_value(t, db.error_text(error.message[:]), "Decoder failure")
+	testing.expect_value(t, db.error_message(&error), "Decoder failure")
 }
 
 @(test)

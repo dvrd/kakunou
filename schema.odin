@@ -69,7 +69,7 @@ build_new_table_sql :: proc(schema: Table_Schema, if_not_exists := true) -> (cst
 		return nil, make_error(
 			.Invalid_Schema,
 			"Schema needs a valid name and at least one column",
-			table = schema.name,
+			subject = schema.name,
 		)
 	}
 
@@ -80,7 +80,7 @@ build_new_table_sql :: proc(schema: Table_Schema, if_not_exists := true) -> (cst
 		data_type := column_type_sql(column.data_type)
 
 		if column.name == "" || strings.contains_rune(column.name, '\x00') || data_type == "" {
-			return nil, make_error(.Invalid_Schema, "Column needs a valid name and data type", table = schema.name)
+			return nil, make_error(.Invalid_Schema, "Column needs a valid name and data type", subject = schema.name)
 		}
 
 		if index > 0 {
@@ -105,7 +105,7 @@ build_new_table_sql :: proc(schema: Table_Schema, if_not_exists := true) -> (cst
 			.Allocation_Failed,
 			"Could not allocate table SQL",
 			allocator_error = err,
-			table = schema.name,
+			subject = schema.name,
 		)
 	}
 
@@ -150,30 +150,33 @@ create_table :: proc(database: ^SQLite_DB, schema: Table_Schema, if_not_exists :
 
 	err = execute_sql(database, sql)
 	if err.kind != .None {
-		copy(err.table[:len(err.table) - 1], schema.name)
+		copy(err.subject[:len(err.subject) - 1], schema.name)
 	}
 	// Error metadata must be attached before returning; defer observes a copy.
-	if free_error := release_owned_cstring(sql); free_error != nil {
-		if err.kind == .None {
-			err = make_error(.Allocation_Failed, "Could not free table SQL", table = schema.name)
-		}
-
-		err.allocator_error = free_error
-	}
+	release_owned_cstring(sql, &err, "Could not free table SQL", schema.name)
 
 	return
 }
 
 // Region allocators deliberately release storage through their owner, not per
-// object. Propagate real free failures while retaining request-arena semantics.
-release_owned_cstring :: proc(value: cstring) -> mem.Allocator_Error {
-	error := delete(value)
+// object. Real free failures are recorded on the caller's error, becoming the
+// primary failure when none occurred; request-arena semantics are retained.
+release_owned_cstring :: proc(value: cstring, err: ^Database_Error, message: string, subject := "") {
+	free_error := delete(value)
 
-	if error == .Mode_Not_Implemented && .Free_All in mem.query_features(context.allocator) {
-		return nil
+	if free_error == .Mode_Not_Implemented && .Free_All in mem.query_features(context.allocator) {
+		return
 	}
 
-	return error
+	if free_error == nil {
+		return
+	}
+
+	if err.kind == .None {
+		err^ = make_error(.Allocation_Failed, message, subject = subject)
+	}
+
+	err.allocator_error = free_error
 }
 
 SQLite_Backup :: struct {}
@@ -191,12 +194,12 @@ backup_file :: proc(source: ^SQLite_DB, path: string) -> Database_Error {
 	file, open_error := os.open(path, {.Write, .Create, .Excl}, os.perm_number(0o600))
 
 	if open_error != nil {
-		return make_error(.Open_Failed, "Backup destination must be a new writable file", path = path)
+		return make_error(.Open_Failed, "Backup destination must be a new writable file", subject = path)
 	}
 
 	if close_error := os.close(file); close_error != nil {
 		backup_remove_incomplete(path)
-		return make_error(.Execution_Failed, "Could not close new backup file", path = path)
+		return make_error(.Execution_Failed, "Could not close new backup file", subject = path)
 	}
 
 	name, allocation_error := strings.clone_to_cstring(path)
@@ -209,13 +212,7 @@ backup_file :: proc(source: ^SQLite_DB, path: string) -> Database_Error {
 	destination: ^SQLite_DB
 	error := open(&destination, name)
 
-	if free_error := release_owned_cstring(name); free_error != nil {
-		if error.kind == .None {
-			error = make_error(.Allocation_Failed, "Could not free backup path")
-		}
-
-		error.allocator_error = free_error
-	}
+	release_owned_cstring(name, &error, "Could not free backup path")
 
 	if error.kind == .None {
 		error = backup_copy(source, destination)

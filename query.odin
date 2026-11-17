@@ -178,7 +178,7 @@ insert_statement :: proc(
 		return make_error(.Execution_Failed, "Insert must not return rows", sqlite_code = result)
 	}
 	if result != .DONE {
-		return make_error(.Execution_Failed, cast(string)sqlite3_errmsg(database), sqlite_code = result)
+		return sqlite_failure(database, result)
 	}
 	return {}
 }
@@ -226,7 +226,7 @@ bind_parameters :: proc(
 		}
 
 		if result != .OK {
-			return make_error(.Execution_Failed, cast(string)(sqlite3_errmsg(database)), sqlite_code = result)
+			return sqlite_failure(database, result)
 		}
 	}
 
@@ -295,7 +295,7 @@ query_many_rows :: proc(
 		}
 
 		if result != .ROW {
-			return nil, make_error(.Execution_Failed, cast(string)sqlite3_errmsg(database), sqlite_code = result)
+			return nil, sqlite_failure(database, result)
 		}
 
 		if row_index == max_rows {
