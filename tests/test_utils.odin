@@ -5,12 +5,7 @@ import "core:testing"
 import "core:log"
 import "core:strings"
 
-test_database_count :: proc(
-	t: ^testing.T,
-	database: ^db.SQLite_DB,
-	sql: cstring,
-	expected: i64,
-) -> bool {
+test_database_count :: proc(t: ^testing.T, database: ^db.SQLite_DB, sql: cstring, expected: i64) -> bool {
 	decode :: proc(statement: ^db.SQLite_Statement, count: ^i64) -> db.Database_Error {
 		value, err := db.column_int(statement, 0)
 		if err.kind != .None do return err
@@ -30,7 +25,6 @@ test_database_count :: proc(
 		count,
 	)
 }
-
 
 test_insert_database :: proc(t: ^testing.T) -> (database: ^db.SQLite_DB, ok: bool) {
 	err := db.open(&database, ":memory:")
@@ -54,7 +48,6 @@ test_insert_database :: proc(t: ^testing.T) -> (database: ^db.SQLite_DB, ok: boo
 
 	return
 }
-
 
 Test_Log :: struct {
 	warning_count:  int,
@@ -84,4 +77,3 @@ test_capture_log :: proc(
 		capture.matched = capture.matched || strings.contains(text, capture.contains)
 	}
 }
-
