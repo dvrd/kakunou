@@ -44,7 +44,6 @@ column_type_sql :: proc(data_type: Column_Type) -> string {
 	return ""
 }
 
-
 // SQL identifiers use double quotes, with embedded quotes doubled.
 write_schema_identifier :: proc(buffer: []u8, name: string) -> int {
 	used := copy(buffer, "\"")
@@ -63,7 +62,6 @@ write_schema_identifier :: proc(buffer: []u8, name: string) -> int {
 
 	return used
 }
-
 
 // The caller owns the returned SQL and releases it with delete.
 build_new_table_sql :: proc(
@@ -148,7 +146,6 @@ create_table :: proc(
 	sql: cstring
 	sql, err = build_new_table_sql(schema, if_not_exists)
 	if err.kind != .None do return
-
 
 	err = execute_sql(database, sql)
 	if err.kind != .None do copy(err.table[:len(err.table) - 1], schema.name)

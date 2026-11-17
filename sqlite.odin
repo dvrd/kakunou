@@ -65,8 +65,6 @@ SQLITE_OPEN_CREATE :: 0x00000004
 SQLITE_OPEN_FULLMUTEX :: 0x00010000
 
 foreign sqlite {
-	sqlite3_busy_timeout :: proc "c" (database: ^SQLite_DB, milliseconds: i32) -> SQLite_Result ---
-	sqlite3_changes :: proc "c" (database: ^SQLite_DB) -> i32 ---
 	sqlite3_db_mutex :: proc "c" (database: ^SQLite_DB) -> ^SQLite_Mutex ---
 	sqlite3_mutex_enter :: proc "c" (mutex: ^SQLite_Mutex) ---
 	sqlite3_mutex_leave :: proc "c" (mutex: ^SQLite_Mutex) ---
@@ -242,22 +240,20 @@ execute_sql_unlocked :: proc(database: ^SQLite_DB, sql: cstring) -> Database_Err
 // The caller must finish exactly once with commit_transaction or rollback_transaction.
 // A failed BEGIN releases only this call's hold; the caller's transaction is untouched.
 begin_immediate :: proc(database: ^SQLite_DB) -> Database_Error {
-	mutex := connection_mutex(database)
-	sqlite3_mutex_enter(mutex)
-	err := execute_sql_unlocked(database, "BEGIN IMMEDIATE;")
-	if err.kind != .None do sqlite3_mutex_leave(mutex)
-	return err
+	return begin(database, "BEGIN IMMEDIATE;")
 }
 
-// Successful read BEGIN has the same ownership contract as begin_immediate:
-// keep its mutex hold until exactly one commit_transaction or rollback_transaction.
+// Same ownership contract as begin_immediate, without taking the write lock.
 begin_read :: proc(database: ^SQLite_DB) -> Database_Error {
+	return begin(database, "BEGIN")
+}
+
+@(private)
+begin :: proc(database: ^SQLite_DB, sql: cstring) -> Database_Error {
 	mutex := connection_mutex(database)
 	sqlite3_mutex_enter(mutex)
-	err := execute_sql_unlocked(database, "BEGIN")
-	if err.kind != .None {
-		sqlite3_mutex_leave(mutex)
-	}
+	err := execute_sql_unlocked(database, sql)
+	if err.kind != .None do sqlite3_mutex_leave(mutex)
 	return err
 }
 
@@ -266,7 +262,7 @@ begin_read :: proc(database: ^SQLite_DB) -> Database_Error {
 // transaction-owned flag before this call and must never roll back its failure.
 commit_transaction :: proc(database: ^SQLite_DB) -> Database_Error {
 	err := execute_sql_unlocked(database, "COMMIT;")
-	if err.kind != .None && (database==nil || sqlite3_get_autocommit(database)==0) {
+	if err.kind != .None && (database == nil || sqlite3_get_autocommit(database) == 0) {
 		cleanup := execute_sql_unlocked(database, "ROLLBACK;")
 		if cleanup.kind != .None do err.cleanup_code = cleanup.sqlite_code
 	}
@@ -279,9 +275,9 @@ commit_transaction :: proc(database: ^SQLite_DB) -> Database_Error {
 rollback_transaction :: proc(database: ^SQLite_DB) {
 	// Statement errors may already have rolled SQLite back. The caller still
 	// owns its connection-mutex hold, which this terminal call consumes once.
-	if database==nil || sqlite3_get_autocommit(database)==0 {
-		if err:=execute_sql_unlocked(database,"ROLLBACK;");err.kind!=.None {
-			log_error(err,"Could not roll back transaction")
+	if database == nil || sqlite3_get_autocommit(database) == 0 {
+		if err := execute_sql_unlocked(database, "ROLLBACK;"); err.kind != .None {
+			log_error(err, "Could not roll back transaction")
 		}
 	}
 	sqlite3_mutex_leave(connection_mutex(database))
@@ -293,6 +289,25 @@ last_insert_rowid :: proc(database: ^SQLite_DB) -> i64 {
 	defer sqlite3_mutex_leave(mutex)
 	if database == nil do return 0
 	return sqlite3_last_insert_rowid(database)
+}
+
+// Caller holds the connection mutex. A nil statement with no error means the
+// SQL held no statement; empty names that case in the returned error.
+@(private)
+prepare :: proc(
+	database: ^SQLite_DB,
+	sql: cstring,
+	empty: string,
+) -> (statement: ^SQLite_Statement, err: Database_Error) {
+	result := sqlite3_prepare_v2(database, sql, -1, &statement, nil)
+	if result != .OK {
+		err = make_error(
+			.Execution_Failed, cast(string)sqlite3_errmsg(database), sqlite_code = result,
+		)
+	} else if statement == nil {
+		err = make_error(.Execution_Failed, empty, sqlite_code = .MISUSE)
+	}
+	return
 }
 
 // Finalize before taking a return-value snapshot. Odin defers cannot modify a
@@ -331,14 +346,8 @@ query_one :: proc(
 	sqlite3_mutex_enter(mutex)
 	defer sqlite3_mutex_leave(mutex)
 	statement: ^SQLite_Statement
-	result := sqlite3_prepare_v2(database, sql, -1, &statement, nil)
-	if result != .OK {
-		err = make_error(
-			.Execution_Failed, cast(string)sqlite3_errmsg(database), sqlite_code = result,
-		)
-	} else if statement == nil {
-		err = make_error(.Execution_Failed, "Empty query", sqlite_code = .MISUSE)
-	} else {
+	statement, err = prepare(database, sql, "Empty query")
+	if err.kind == .None {
 		found, err = query_one_row(database, statement, parameters, output, decode)
 	}
 	if !statement_finalize(statement, &err, "Could not finalize query") do found = false

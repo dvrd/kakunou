@@ -161,18 +161,8 @@ insert :: proc(
 	sqlite3_mutex_enter(mutex)
 	defer sqlite3_mutex_leave(mutex)
 	statement: ^SQLite_Statement
-	result := sqlite3_prepare_v2(database, sql, -1, &statement, nil)
-	if result != .OK {
-		err = make_error(
-			.Execution_Failed, cast(string)sqlite3_errmsg(database), sqlite_code = result,
-		)
-	} else if statement == nil {
-		err = make_error(
-			.Execution_Failed, "Insert did not contain an SQL statement", sqlite_code = .MISUSE,
-		)
-	} else {
-		err = insert_statement(database, statement, parameters)
-	}
+	statement, err = prepare(database, sql, "Insert did not contain an SQL statement")
+	if err.kind == .None do err = insert_statement(database, statement, parameters)
 	statement_finalize(statement, &err, "Could not finalize insert")
 	return
 }
@@ -277,23 +267,11 @@ query_many :: proc(
 	sqlite3_mutex_enter(mutex)
 	defer sqlite3_mutex_leave(mutex)
 	statement: ^SQLite_Statement
-	result := sqlite3_prepare_v2(database, sql, -1, &statement, nil)
-
-	if result != .OK {
-		err = make_error(
-			.Execution_Failed, cast(string)sqlite3_errmsg(database), sqlite_code = result,
-		)
-	} else if statement == nil {
-		err = make_error(.Execution_Failed, "Empty query", sqlite_code = .MISUSE)
-	} else {
-		err = bind_parameters(database, statement, parameters)
-		if err.kind == .None {
-			rows, err = query_many_rows(database, statement, decode, max_rows)
-		}
-	}
+	statement, err = prepare(database, sql, "Empty query")
+	if err.kind == .None do err = bind_parameters(database, statement, parameters)
+	if err.kind == .None do rows, err = query_many_rows(database, statement, decode, max_rows)
 	if !statement_finalize(statement, &err, "Could not finalize query") do rows = nil
 	return
-
 }
 
 query_many_rows :: proc(
