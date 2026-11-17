@@ -170,20 +170,9 @@ release_owned_cstring :: proc(value: cstring) -> mem.Allocator_Error {
 	return error
 }
 
-foreign import backup_library "system:sqlite3"
-
 SQLite_Backup :: struct {}
 BACKUP_TIMEOUT :: 10 * time.Second
 BACKUP_PAGE_BATCH :: 256
-
-foreign backup_library {
-	sqlite3_backup_init :: proc "c" (
-		destination: ^SQLite_DB, destination_name: cstring,
-		source: ^SQLite_DB, source_name: cstring,
-	) -> ^SQLite_Backup ---
-	sqlite3_backup_step :: proc "c" (backup: ^SQLite_Backup, pages: i32) -> SQLite_Result ---
-	sqlite3_backup_finish :: proc "c" (backup: ^SQLite_Backup) -> SQLite_Result ---
-}
 
 // Uses SQLite's consistent online-backup API, including uncheckpointed WAL.
 // Never replaces an existing file. Only a successful return denotes a finished

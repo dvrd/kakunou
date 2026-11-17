@@ -141,9 +141,7 @@ column_blob :: proc(
 			.Allocation_Failed, "Could not copy blob", allocator_error = allocation_error,
 		)
 	}
-	if length > 0 {
-		copy(bytes, (cast([^]u8)pointer)[:cast(int)length])
-	}
+	copy(bytes, (cast([^]u8)pointer)[:cast(int)length])
 	return bytes, {}
 }
 
@@ -304,16 +302,8 @@ query_many_rows :: proc(
 			)
 		}
 		row: T
-		if error := decode(statement, &row); error.kind != .None do return nil, error
-		if len(values) == cap(values) {
-			capacity := min(max_rows, cap(values) * 2)
-			allocation_error = reserve(&values, capacity)
-			if allocation_error != nil {
-				return nil, make_error(
-					.Allocation_Failed, "Could not grow query rows",
-					allocator_error = allocation_error,
-				)
-			}
+		if error := decode(statement, &row); error.kind != .None {
+			return nil, error
 		}
 		_, allocation_error = append(&values, row)
 		if allocation_error != nil {

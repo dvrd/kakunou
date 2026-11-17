@@ -135,7 +135,7 @@ foreign sqlite {
 		sql: cstring,
 		callback: proc "c" (
 			data: rawptr,
-			coulmn_count: i32,
+			column_count: i32,
 			values: [^]cstring,
 			names: [^]cstring,
 		) -> SQLite_Result,
@@ -146,6 +146,13 @@ foreign sqlite {
 	sqlite3_finalize :: proc "c" (statement: ^SQLite_Statement) -> SQLite_Result ---
 
 	sqlite3_last_insert_rowid :: proc "c" (database: ^SQLite_DB) -> i64 ---
+
+	sqlite3_backup_init :: proc "c" (
+		destination: ^SQLite_DB, destination_name: cstring,
+		source: ^SQLite_DB, source_name: cstring,
+	) -> ^SQLite_Backup ---
+	sqlite3_backup_step :: proc "c" (backup: ^SQLite_Backup, pages: i32) -> SQLite_Result ---
+	sqlite3_backup_finish :: proc "c" (backup: ^SQLite_Backup) -> SQLite_Result ---
 }
 
 // SQLite owns this recursive mutex for the lifetime of a FULLMUTEX connection.
