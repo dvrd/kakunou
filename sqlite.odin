@@ -115,7 +115,9 @@ foreign sqlite {
 // A nil mutex is a no-op for SQLite's enter/leave routines, preserving nil-handle errors.
 @(private)
 connection_mutex :: proc(database: ^SQLite_DB) -> ^SQLite_Mutex {
-	if database == nil do return nil
+	if database == nil {
+		return nil
+	}
 
 	return sqlite3_db_mutex(database)
 }
@@ -154,7 +156,9 @@ open :: proc(database: ^^SQLite_DB, path: cstring) -> Database_Error {
 
 		if database^ != nil {
 			err.cleanup_code = sqlite3_close(database^)
-			if err.cleanup_code == .OK do database^ = nil
+			if err.cleanup_code == .OK {
+				database^ = nil
+			}
 		}
 
 		return err
@@ -209,7 +213,9 @@ begin :: proc(database: ^SQLite_DB, sql: cstring) -> Database_Error {
 	mutex := connection_mutex(database)
 	sqlite3_mutex_enter(mutex)
 	err := execute_sql_unlocked(database, sql)
-	if err.kind != .None do sqlite3_mutex_leave(mutex)
+	if err.kind != .None {
+		sqlite3_mutex_leave(mutex)
+	}
 
 	return err
 }
@@ -222,7 +228,9 @@ commit_transaction :: proc(database: ^SQLite_DB) -> Database_Error {
 
 	if err.kind != .None && (database == nil || sqlite3_get_autocommit(database) == 0) {
 		cleanup := execute_sql_unlocked(database, "ROLLBACK;")
-		if cleanup.kind != .None do err.cleanup_code = cleanup.sqlite_code
+		if cleanup.kind != .None {
+			err.cleanup_code = cleanup.sqlite_code
+		}
 	}
 
 	sqlite3_mutex_leave(connection_mutex(database))
@@ -248,7 +256,9 @@ last_insert_rowid :: proc(database: ^SQLite_DB) -> i64 {
 	mutex := connection_mutex(database)
 	sqlite3_mutex_enter(mutex)
 	defer sqlite3_mutex_leave(mutex)
-	if database == nil do return 0
+	if database == nil {
+		return 0
+	}
 
 	return sqlite3_last_insert_rowid(database)
 }
@@ -277,9 +287,13 @@ prepare :: proc(
 // returned error, so cleanup diagnostics must be attached in explicit control flow.
 statement_finalize :: proc(statement: ^SQLite_Statement, error: ^Database_Error, message: string) -> bool {
 	assert(error != nil)
-	if statement == nil do return true
+	if statement == nil {
+		return true
+	}
 	code := sqlite3_finalize(statement)
-	if code == .OK do return true
+	if code == .OK {
+		return true
+	}
 
 	if error.kind == .None {
 		error^ = make_error(.Execution_Failed, message, sqlite_code = code)
@@ -312,7 +326,9 @@ query_one :: proc(
 	if err.kind == .None {
 		found, err = query_one_row(database, statement, parameters, output, decode)
 	}
-	if !statement_finalize(statement, &err, "Could not finalize query") do found = false
+	if !statement_finalize(statement, &err, "Could not finalize query") {
+		found = false
+	}
 	return
 }
 
@@ -327,9 +343,13 @@ query_one_row :: proc(
 	Database_Error,
 ) {
 	error := bind_parameters(database, statement, parameters)
-	if error.kind != .None do return false, error
+	if error.kind != .None {
+		return false, error
+	}
 	result := sqlite3_step(statement)
-	if result == .DONE do return false, {}
+	if result == .DONE {
+		return false, {}
+	}
 	if result != .ROW {
 		return false, make_error(.Execution_Failed, cast(string)sqlite3_errmsg(database), sqlite_code = result)
 	}
@@ -380,13 +400,17 @@ make_error :: proc(
 // The returned string borrows the supplied error's buffer.
 error_text :: proc(buffer: []u8) -> string {
 	text := cast(string)(buffer)
-	if end := strings.index_byte(text, 0); end >= 0 do text = text[:end]
+	if end := strings.index_byte(text, 0); end >= 0 {
+		text = text[:end]
+	}
 
 	return text
 }
 
 log_error :: proc(err: Database_Error, operation := "Database operation failed") {
-	if err.kind == .None do return
+	if err.kind == .None {
+		return
+	}
 
 	diagnostic := err
 

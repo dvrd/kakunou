@@ -35,23 +35,35 @@ database_transaction_worker :: proc(data: rawptr) {
 @(test)
 database_transaction_does_not_block_an_independent_connection :: proc(t: ^testing.T) {
 	first, first_ready := test_insert_database(t)
-	if !first_ready do return
+	if !first_ready {
+		return
+	}
 	defer db.close(first)
 	second, second_ready := test_insert_database(t)
-	if !second_ready do return
+	if !second_ready {
+		return
+	}
 	defer db.close(second)
 	err := db.begin_immediate(first)
-	if !testing.expect(t, err.kind == .None, "begin transaction on first database") do return
+	if !testing.expect(t, err.kind == .None, "begin transaction on first database") {
+		return
+	}
 	outer_open := true
-	defer if outer_open do db.rollback_transaction(first)
+	defer if outer_open {
+		db.rollback_transaction(first)
+	}
 	err = db.insert(first, "INSERT INTO items(id,title) VALUES(1,'outer');", nil)
-	if !testing.expect(t, err.kind == .None, "write to first database") do return
+	if !testing.expect(t, err.kind == .None, "write to first database") {
+		return
+	}
 	state := Database_Transaction_Worker {
 		database = second,
 	}
 
 	worker := thread.create_and_start_with_data(&state, database_transaction_worker, runtime.default_context())
-	if !testing.expect(t, worker != nil, "start independent database transaction") do return
+	if !testing.expect(t, worker != nil, "start independent database transaction") {
+		return
+	}
 	defer {
 		if outer_open {
 			db.rollback_transaction(first)
@@ -61,7 +73,9 @@ database_transaction_does_not_block_an_independent_connection :: proc(t: ^testin
 		thread.destroy(worker)
 	}
 
-	if !testing.expect(t, sync.sema_wait_with_timeout(&state.started, 2 * time.Second), "independent worker starts") do return
+	if !testing.expect(t, sync.sema_wait_with_timeout(&state.started, 2 * time.Second), "independent worker starts") {
+		return
+	}
 	completed := sync.sema_wait_with_timeout(&state.finished, time.Second)
 	testing.expect(t, completed, "independent transaction completes while first database remains locked")
 	db.rollback_transaction(first)
@@ -76,20 +90,30 @@ database_transaction_does_not_block_an_independent_connection :: proc(t: ^testin
 database_connection_stays_locked_until_its_owner_commits_or_rolls_back :: proc(t: ^testing.T) {
 	for commit in ([2]bool{true, false}) {
 		database, ready := test_insert_database(t)
-		if !ready do return
+		if !ready {
+			return
+		}
 		defer db.close(database)
 		err := db.begin_immediate(database)
-		if !testing.expect(t, err.kind == .None, "begin owner transaction") do return
+		if !testing.expect(t, err.kind == .None, "begin owner transaction") {
+			return
+		}
 		outer_open := true
-		defer if outer_open do db.rollback_transaction(database)
+		defer if outer_open {
+			db.rollback_transaction(database)
+		}
 		err = db.insert(database, "INSERT INTO items(id,title) VALUES(1,'owner');", nil)
-		if !testing.expect(t, err.kind == .None, "write owner row") do return
+		if !testing.expect(t, err.kind == .None, "write owner row") {
+			return
+		}
 		state := Database_Transaction_Worker {
 			database = database,
 		}
 
 		worker := thread.create_and_start_with_data(&state, database_transaction_worker, runtime.default_context())
-		if !testing.expect(t, worker != nil, "start competing transaction") do return
+		if !testing.expect(t, worker != nil, "start competing transaction") {
+			return
+		}
 		defer {
 			if outer_open {
 				db.rollback_transaction(database)
@@ -99,7 +123,9 @@ database_connection_stays_locked_until_its_owner_commits_or_rolls_back :: proc(t
 			thread.destroy(worker)
 		}
 
-		if !testing.expect(t, sync.sema_wait_with_timeout(&state.started, 2 * time.Second), "competing worker starts") do return
+		if !testing.expect(t, sync.sema_wait_with_timeout(&state.started, 2 * time.Second), "competing worker starts") {
+			return
+		}
 		testing.expect(
 			t,
 			!sync.sema_wait_with_timeout(&state.finished, 100 * time.Millisecond),
@@ -130,18 +156,28 @@ database_connection_stays_locked_until_its_owner_commits_or_rolls_back :: proc(t
 database_nested_begin_preserves_the_outer_transaction :: proc(t: ^testing.T) {
 	for commit in ([2]bool{true, false}) {
 		database, ready := test_insert_database(t)
-		if !ready do return
+		if !ready {
+			return
+		}
 		defer db.close(database)
 		err := db.begin_immediate(database)
-		if !testing.expect(t, err.kind == .None, "begin outer transaction") do return
+		if !testing.expect(t, err.kind == .None, "begin outer transaction") {
+			return
+		}
 		outer_open := true
-		defer if outer_open do db.rollback_transaction(database)
+		defer if outer_open {
+			db.rollback_transaction(database)
+		}
 		err = db.insert(database, "INSERT INTO items(id,title) VALUES(1,'outer work');", nil)
-		if !testing.expect(t, err.kind == .None, "insert within outer transaction") do return
+		if !testing.expect(t, err.kind == .None, "insert within outer transaction") {
+			return
+		}
 
 		nested := db.begin_immediate(database)
 		// Balance both holds when reproducing the old implementation's false success.
-		if nested.kind == .None do db.rollback_transaction(database)
+		if nested.kind == .None {
+			db.rollback_transaction(database)
+		}
 		testing.expect(
 			t,
 			nested.kind == .Execution_Failed && nested.sqlite_code == .ERROR,
@@ -161,7 +197,9 @@ database_nested_begin_preserves_the_outer_transaction :: proc(t: ^testing.T) {
 		}
 
 		err = db.begin_immediate(database)
-		if !testing.expect(t, err.kind == .None, "connection remains usable after the owner finishes") do return
+		if !testing.expect(t, err.kind == .None, "connection remains usable after the owner finishes") {
+			return
+		}
 		db.rollback_transaction(database)
 	}
 }
@@ -171,16 +209,24 @@ database_helpers_create_tables_and_execute_sql :: proc(t: ^testing.T) {
 	database: ^db.SQLite_DB
 	opened := (db.open(&database, ":memory:").kind == .None)
 	defer testing.expect(t, db.sqlite3_close(database) == .OK, "close database without outstanding statements")
-	if !testing.expect(t, opened, "open in-memory database") do return
+	if !testing.expect(t, opened, "open in-memory database") {
+		return
+	}
 
 	schema := db.Table_Schema {
 		name    = "items",
 		columns = {{name = "id", data_type = .Integer, primary_key = true}},
 	}
 
-	if !testing.expect(t, (db.create_table(database, schema).kind == .None), "create table") do return
-	if !testing.expect(t, (db.create_table(database, schema).kind == .None), "idempotent schema initialization") do return
-	if !testing.expect(t, (db.execute_sql(database, "INSERT INTO items (id) VALUES (1), (2);").kind == .None), "execute insert") do return
+	if !testing.expect(t, (db.create_table(database, schema).kind == .None), "create table") {
+		return
+	}
+	if !testing.expect(t, (db.create_table(database, schema).kind == .None), "idempotent schema initialization") {
+		return
+	}
+	if !testing.expect(t, (db.execute_sql(database, "INSERT INTO items (id) VALUES (1), (2);").kind == .None), "execute insert") {
+		return
+	}
 
 	test_database_count(t, database, "SELECT COUNT(*) FROM items;", 2)
 }
@@ -190,7 +236,9 @@ database_helpers_return_errors_without_logging :: proc(t: ^testing.T) {
 	database: ^db.SQLite_DB
 	opened := (db.open(&database, ":memory:").kind == .None)
 	defer testing.expect(t, db.sqlite3_close(database) == .OK, "close database after errors")
-	if !testing.expect(t, opened, "open in-memory database") do return
+	if !testing.expect(t, opened, "open in-memory database") {
+		return
+	}
 
 	capture := Test_Log {
 		contains = "Database initialization failed",
@@ -236,7 +284,9 @@ table_schema_types_and_constraints_are_applied :: proc(t: ^testing.T) {
 	database: ^db.SQLite_DB
 	opened := (db.open(&database, ":memory:").kind == .None)
 	defer testing.expect(t, db.sqlite3_close(database) == .OK, "close database")
-	if !testing.expect(t, opened, "open database") do return
+	if !testing.expect(t, opened, "open database") {
+		return
+	}
 
 	schema := db.Table_Schema {
 		name    = "items",
@@ -250,7 +300,9 @@ table_schema_types_and_constraints_are_applied :: proc(t: ^testing.T) {
 		},
 	}
 
-	if !testing.expect(t, (db.create_table(database, schema).kind == .None), "create typed schema") do return
+	if !testing.expect(t, (db.create_table(database, schema).kind == .None), "create typed schema") {
+		return
+	}
 
 	metadata: cstring = `
 		SELECT COUNT(*) FROM pragma_table_info('items') WHERE
@@ -261,9 +313,13 @@ table_schema_types_and_constraints_are_applied :: proc(t: ^testing.T) {
 		(name = 'raw' AND type = 'BLOB') OR
 		(name = 'score' AND type = 'NUMERIC');
 	`
-	if !test_database_count(t, database, metadata, 6) do return
+	if !test_database_count(t, database, metadata, 6) {
+		return
+	}
 
-	if !testing.expect(t, (db.execute_sql(database, "INSERT INTO items (label, note) VALUES ('first', NULL);").kind == .None), "nullable column and generated primary key") do return
+	if !testing.expect(t, (db.execute_sql(database, "INSERT INTO items (label, note) VALUES ('first', NULL);").kind == .None), "nullable column and generated primary key") {
+		return
+	}
 
 	capture := Test_Log{}
 	previous_logger := context.logger
@@ -296,17 +352,25 @@ table_schema_quotes_names_and_supports_explicit_creation :: proc(t: ^testing.T) 
 	database: ^db.SQLite_DB
 	opened := (db.open(&database, ":memory:").kind == .None)
 	defer testing.expect(t, db.sqlite3_close(database) == .OK, "close database")
-	if !testing.expect(t, opened, "open database") do return
+	if !testing.expect(t, opened, "open database") {
+		return
+	}
 
 	schema := db.Table_Schema {
 		name    = "events\"; DROP TABLE other; --",
 		columns = {{name = "select", data_type = .Integer}, {name = "friend\"s 🎉", data_type = .Text}},
 	}
 
-	if !testing.expect(t, (db.create_table(database, schema, if_not_exists = false).kind == .None), "quoted identifier names are literal") do return
+	if !testing.expect(t, (db.create_table(database, schema, if_not_exists = false).kind == .None), "quoted identifier names are literal") {
+		return
+	}
 
-	if !testing.expect(t, (db.execute_sql(database, `INSERT INTO "events""; DROP TABLE other; --" ("select", "friend""s 🎉") VALUES (1, 'name');`).kind == .None), "quoted columns are usable") do return
-	if !test_database_count(t, database, `SELECT COUNT(*) FROM "events""; DROP TABLE other; --";`, 1) do return
+	if !testing.expect(t, (db.execute_sql(database, `INSERT INTO "events""; DROP TABLE other; --" ("select", "friend""s 🎉") VALUES (1, 'name');`).kind == .None), "quoted columns are usable") {
+		return
+	}
+	if !test_database_count(t, database, `SELECT COUNT(*) FROM "events""; DROP TABLE other; --";`, 1) {
+		return
+	}
 
 	capture := Test_Log{}
 	previous_logger := context.logger

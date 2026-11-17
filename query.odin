@@ -14,8 +14,12 @@ column_text :: proc(
 ) {
 	valid: bool
 	text, valid, err = column_text_optional(statement, column, allocator)
-	if err.kind != .None do return
-	if !valid do err = null_column(column)
+	if err.kind != .None {
+		return
+	}
+	if !valid {
+		err = null_column(column)
+	}
 
 	return
 }
@@ -29,8 +33,12 @@ column_text_optional :: proc(
 	valid: bool,
 	err: Database_Error,
 ) {
-	if err = column_index(statement, column); err.kind != .None do return
-	if sqlite3_column_type(statement, cast(i32)(column)) == .NULL do return
+	if err = column_index(statement, column); err.kind != .None {
+		return
+	}
+	if sqlite3_column_type(statement, cast(i32)(column)) == .NULL {
+		return
+	}
 
 	pointer := sqlite3_column_text(statement, cast(i32)(column))
 	length := sqlite3_column_bytes(statement, cast(i32)(column))
@@ -56,8 +64,12 @@ column_text_optional :: proc(
 column_int :: proc(statement: ^SQLite_Statement, column: int) -> (value: i64, err: Database_Error) {
 	valid: bool
 	value, valid, err = column_int_optional(statement, column)
-	if err.kind != .None do return
-	if !valid do err = null_column(column)
+	if err.kind != .None {
+		return
+	}
+	if !valid {
+		err = null_column(column)
+	}
 
 	return
 }
@@ -70,8 +82,12 @@ column_int_optional :: proc(
 	valid: bool,
 	err: Database_Error,
 ) {
-	if err = column_index(statement, column); err.kind != .None do return
-	if sqlite3_column_type(statement, cast(i32)(column)) == .NULL do return
+	if err = column_index(statement, column); err.kind != .None {
+		return
+	}
+	if sqlite3_column_type(statement, cast(i32)(column)) == .NULL {
+		return
+	}
 
 	value = sqlite3_column_int64(statement, cast(i32)(column))
 	valid = true
@@ -140,7 +156,9 @@ insert :: proc(database: ^SQLite_DB, sql: cstring, parameters: []SQLite_Value) -
 	defer sqlite3_mutex_leave(mutex)
 	statement: ^SQLite_Statement
 	statement, err = prepare(database, sql, "Insert did not contain an SQL statement")
-	if err.kind == .None do err = insert_statement(database, statement, parameters)
+	if err.kind == .None {
+		err = insert_statement(database, statement, parameters)
+	}
 	statement_finalize(statement, &err, "Could not finalize insert")
 
 	return
@@ -152,7 +170,9 @@ insert_statement :: proc(
 	parameters: []SQLite_Value,
 ) -> Database_Error {
 	error := bind_parameters(database, statement, parameters)
-	if error.kind != .None do return error
+	if error.kind != .None {
+		return error
+	}
 	result := sqlite3_step(statement)
 	if result == .ROW {
 		return make_error(.Execution_Failed, "Insert must not return rows", sqlite_code = result)
@@ -239,9 +259,15 @@ query_many :: proc(
 	defer sqlite3_mutex_leave(mutex)
 	statement: ^SQLite_Statement
 	statement, err = prepare(database, sql, "Empty query")
-	if err.kind == .None do err = bind_parameters(database, statement, parameters)
-	if err.kind == .None do rows, err = query_many_rows(database, statement, decode, max_rows)
-	if !statement_finalize(statement, &err, "Could not finalize query") do rows = nil
+	if err.kind == .None {
+		err = bind_parameters(database, statement, parameters)
+	}
+	if err.kind == .None {
+		rows, err = query_many_rows(database, statement, decode, max_rows)
+	}
+	if !statement_finalize(statement, &err, "Could not finalize query") {
+		rows = nil
+	}
 	return
 }
 
@@ -264,7 +290,9 @@ query_many_rows :: proc(
 	// One extra step distinguishes an exact-limit result from an excess row.
 	for row_index in 0 ..< max_rows + 1 {
 		result := sqlite3_step(statement)
-		if result == .DONE do return values[:], {}
+		if result == .DONE {
+			return values[:], {}
+		}
 
 		if result != .ROW {
 			return nil, make_error(.Execution_Failed, cast(string)sqlite3_errmsg(database), sqlite_code = result)

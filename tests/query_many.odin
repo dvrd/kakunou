@@ -7,7 +7,9 @@ import "core:testing"
 
 test_query_integer :: proc(statement: ^db.SQLite_Statement, output: ^i64) -> db.Database_Error {
 	value, error := db.column_int(statement, 0)
-	if error.kind == .None do output^ = value
+	if error.kind == .None {
+		output^ = value
+	}
 
 	return error
 }
@@ -15,7 +17,9 @@ test_query_integer :: proc(statement: ^db.SQLite_Statement, output: ^i64) -> db.
 @(test)
 query_many_rejects_invalid_inputs_before_allocating_or_entering_sqlite :: proc(t: ^testing.T) {
 	database, ready := test_insert_database(t)
-	if !ready do return
+	if !ready {
+		return
+	}
 	defer testing.expect_value(t, db.sqlite3_close(database), .OK)
 	storage: [1]u8
 	arena: mem.Arena
@@ -51,7 +55,9 @@ query_many_preserves_empty_json_and_accepts_the_maximum_configured_limit :: proc
 	defer mem.dynamic_arena_destroy(&arena)
 	context.temp_allocator = mem.dynamic_arena_allocator(&arena)
 	database, ready := test_insert_database(t)
-	if !ready do return
+	if !ready {
+		return
+	}
 	defer testing.expect_value(t, db.sqlite3_close(database), .OK)
 	rows, error := db.query_many(database, "SELECT 1 WHERE 0", nil, test_query_integer)
 	testing.expect_value(t, error.kind, .None)
@@ -63,13 +69,17 @@ query_many_preserves_empty_json_and_accepts_the_maximum_configured_limit :: proc
 	testing.expect_value(t, cast(string)encoded, "[]")
 	rows, error = db.query_many(database, "SELECT 9", nil, test_query_integer, db.QUERY_ROWS_LIMIT)
 	testing.expect_value(t, error.kind, .None)
-	if testing.expect_value(t, len(rows), 1) do testing.expect_value(t, rows[0], 9)
+	if testing.expect_value(t, len(rows), 1) {
+		testing.expect_value(t, rows[0], 9)
+	}
 }
 
 @(test)
 query_many_bounds_initial_capacity_by_the_requested_limit :: proc(t: ^testing.T) {
 	database, ready := test_insert_database(t)
-	if !ready do return
+	if !ready {
+		return
+	}
 	defer testing.expect_value(t, db.sqlite3_close(database), .OK)
 	// One i64 plus alignment fits; the old unconditional eight-row allocation did not.
 	storage: [2 * size_of(i64)]u8
@@ -78,7 +88,9 @@ query_many_bounds_initial_capacity_by_the_requested_limit :: proc(t: ^testing.T)
 	context.temp_allocator = mem.arena_allocator(&arena)
 	rows, error := db.query_many(database, "SELECT 42", nil, test_query_integer, 1)
 	testing.expect_value(t, error.kind, .None)
-	if testing.expect_value(t, len(rows), 1) do testing.expect_value(t, rows[0], 42)
+	if testing.expect_value(t, len(rows), 1) {
+		testing.expect_value(t, rows[0], 42)
+	}
 }
 
 @(test)
@@ -88,14 +100,18 @@ query_many_accepts_exact_limits_and_rejects_excess_rows_without_partial_rows :: 
 	defer mem.dynamic_arena_destroy(&arena)
 	context.temp_allocator = mem.dynamic_arena_allocator(&arena)
 	database, ready := test_insert_database(t)
-	if !ready do return
+	if !ready {
+		return
+	}
 	defer testing.expect_value(t, db.sqlite3_close(database), .OK)
 	sql: cstring = "SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3"
 	rows, error := db.query_many(database, sql, nil, test_query_integer, 3)
 	testing.expect_value(t, error.kind, .None)
 
 	if testing.expect_value(t, len(rows), 3) {
-		for value, index in rows do testing.expect_value(t, value, i64(index + 1))
+		for value, index in rows {
+			testing.expect_value(t, value, i64(index + 1))
+		}
 	}
 
 	rows, error = db.query_many(database, sql, nil, test_query_integer, 2)
@@ -112,7 +128,9 @@ query_many_finalizes_prepare_bind_step_and_decoder_failure_paths :: proc(t: ^tes
 	defer mem.dynamic_arena_destroy(&arena)
 	context.temp_allocator = mem.dynamic_arena_allocator(&arena)
 	database, ready := test_insert_database(t)
-	if !ready do return
+	if !ready {
+		return
+	}
 	defer testing.expect_value(t, db.sqlite3_close(database), .OK)
 
 	for query in ([]struct {
@@ -148,7 +166,9 @@ query_many_retains_finalize_error_alongside_the_primary_decoder_failure :: proc(
 	defer mem.dynamic_arena_destroy(&arena)
 	context.temp_allocator = mem.dynamic_arena_allocator(&arena)
 	database, ready := test_insert_database(t)
-	if !ready do return
+	if !ready {
+		return
+	}
 	defer testing.expect_value(t, db.sqlite3_close(database), .OK)
 	decode_failure := proc(statement: ^db.SQLite_Statement, output: ^i64) -> db.Database_Error {
 		// Fail the following row while the callback owns the borrowed statement.
@@ -166,7 +186,9 @@ query_many_retains_finalize_error_alongside_the_primary_decoder_failure :: proc(
 @(test)
 query_many_propagates_initial_and_growth_allocation_failures :: proc(t: ^testing.T) {
 	database, ready := test_insert_database(t)
-	if !ready do return
+	if !ready {
+		return
+	}
 	defer testing.expect_value(t, db.sqlite3_close(database), .OK)
 
 	for limit in ([]int{1, 8 * size_of(i64) + align_of(i64) - 1}) {
@@ -185,14 +207,18 @@ query_many_propagates_initial_and_growth_allocation_failures :: proc(t: ^testing
 @(test)
 query_one_and_insert_surface_deferred_constraint_failures_during_finalize :: proc(t: ^testing.T) {
 	database: ^db.SQLite_DB
-	if !testing.expect_value(t, db.open(&database, ":memory:").kind, .None) do return
+	if !testing.expect_value(t, db.open(&database, ":memory:").kind, .None) {
+		return
+	}
 	defer testing.expect_value(t, db.sqlite3_close(database), .OK)
 	// RETURNING yields a row before SQLite attempts the implicit transaction commit.
 	schema: cstring = `PRAGMA foreign_keys=ON;
 		CREATE TABLE parents(id INTEGER PRIMARY KEY);
 		CREATE TABLE children(parent INTEGER REFERENCES parents(id)
 			DEFERRABLE INITIALLY DEFERRED);`
-	if !testing.expect_value(t, db.execute_sql(database, schema).kind, .None) do return
+	if !testing.expect_value(t, db.execute_sql(database, schema).kind, .None) {
+		return
+	}
 	query: cstring = "INSERT INTO children VALUES(1) RETURNING parent"
 	value: i64
 	found, query_error := db.query_one(database, query, nil, &value, test_query_integer)
@@ -210,7 +236,9 @@ query_one_and_insert_surface_deferred_constraint_failures_during_finalize :: pro
 @(test)
 query_one_preserves_primary_decoder_and_finalize_failures :: proc(t: ^testing.T) {
 	database, ready := test_insert_database(t)
-	if !ready do return
+	if !ready {
+		return
+	}
 	defer testing.expect_value(t, db.sqlite3_close(database), .OK)
 	decode_failure := proc(statement: ^db.SQLite_Statement, output: ^i64) -> db.Database_Error {
 		assert(db.sqlite3_step(statement) == .ERROR)
@@ -233,16 +261,24 @@ query_one_preserves_primary_decoder_and_finalize_failures :: proc(t: ^testing.T)
 @(test)
 commit_failure_consumes_the_transaction_hold_and_allows_a_new_transaction :: proc(t: ^testing.T) {
 	database: ^db.SQLite_DB
-	if !testing.expect_value(t, db.open(&database, ":memory:").kind, .None) do return
+	if !testing.expect_value(t, db.open(&database, ":memory:").kind, .None) {
+		return
+	}
 	defer testing.expect_value(t, db.sqlite3_close(database), .OK)
 	schema: cstring = `PRAGMA foreign_keys=ON;
 		CREATE TABLE parents(id INTEGER PRIMARY KEY);
 		CREATE TABLE children(parent INTEGER REFERENCES parents(id)
 			DEFERRABLE INITIALLY DEFERRED);`
-	if !testing.expect_value(t, db.execute_sql(database, schema).kind, .None) do return
-	if !testing.expect_value(t, db.begin_immediate(database).kind, .None) do return
+	if !testing.expect_value(t, db.execute_sql(database, schema).kind, .None) {
+		return
+	}
+	if !testing.expect_value(t, db.begin_immediate(database).kind, .None) {
+		return
+	}
 	owned := true
-	defer if owned do db.rollback_transaction(database)
+	defer if owned {
+		db.rollback_transaction(database)
+	}
 	testing.expect_value(t, db.insert(database, "INSERT INTO children VALUES(1)", nil).kind, .None)
 	owned = false
 	error := db.commit_transaction(database)
@@ -270,14 +306,18 @@ test_schema_free_failure :: proc(
 ) {
 	parent := cast(^mem.Allocator)data
 	result, error := parent.procedure(parent.data, mode, size, alignment, old_memory, old_size, location)
-	if mode == .Free && error == nil do error = .Invalid_Pointer
+	if mode == .Free && error == nil {
+		error = .Invalid_Pointer
+	}
 	return result, error
 }
 
 @(test)
 schema_creation_retains_cleanup_errors_before_returning :: proc(t: ^testing.T) {
 	database: ^db.SQLite_DB
-	if !testing.expect_value(t, db.open(&database, ":memory:").kind, .None) do return
+	if !testing.expect_value(t, db.open(&database, ":memory:").kind, .None) {
+		return
+	}
 	defer testing.expect_value(t, db.sqlite3_close(database), .OK)
 	parent := context.allocator
 	context.allocator = {

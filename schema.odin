@@ -83,11 +83,19 @@ build_new_table_sql :: proc(schema: Table_Schema, if_not_exists := true) -> (cst
 			return nil, make_error(.Invalid_Schema, "Column needs a valid name and data type", table = schema.name)
 		}
 
-		if index > 0 do size += len(", ")
+		if index > 0 {
+			size += len(", ")
+		}
 		size += len(column.name) + strings.count(column.name, "\"") + 2 + 1 + len(data_type)
-		if column.primary_key do size += len(" PRIMARY KEY")
-		if column.not_null do size += len(" NOT NULL")
-		if column.unique do size += len(" UNIQUE")
+		if column.primary_key {
+			size += len(" PRIMARY KEY")
+		}
+		if column.not_null {
+			size += len(" NOT NULL")
+		}
+		if column.unique {
+			size += len(" UNIQUE")
+		}
 	}
 
 	buffer, err := make([]u8, size + 1, context.allocator)
@@ -106,14 +114,22 @@ build_new_table_sql :: proc(schema: Table_Schema, if_not_exists := true) -> (cst
 	used += copy(buffer[used:], " (")
 
 	for column, index in schema.columns {
-		if index > 0 do used += copy(buffer[used:], ", ")
+		if index > 0 {
+			used += copy(buffer[used:], ", ")
+		}
 		used += write_schema_identifier(buffer[used:], column.name)
 		used += copy(buffer[used:], " ")
 		used += copy(buffer[used:], column_type_sql(column.data_type))
 
-		if column.primary_key do used += copy(buffer[used:], " PRIMARY KEY")
-		if column.not_null do used += copy(buffer[used:], " NOT NULL")
-		if column.unique do used += copy(buffer[used:], " UNIQUE")
+		if column.primary_key {
+			used += copy(buffer[used:], " PRIMARY KEY")
+		}
+		if column.not_null {
+			used += copy(buffer[used:], " NOT NULL")
+		}
+		if column.unique {
+			used += copy(buffer[used:], " UNIQUE")
+		}
 	}
 
 	copy(buffer[used:], ");")
@@ -128,10 +144,14 @@ create_table :: proc(database: ^SQLite_DB, schema: Table_Schema, if_not_exists :
 
 	sql: cstring
 	sql, err = build_new_table_sql(schema, if_not_exists)
-	if err.kind != .None do return
+	if err.kind != .None {
+		return
+	}
 
 	err = execute_sql(database, sql)
-	if err.kind != .None do copy(err.table[:len(err.table) - 1], schema.name)
+	if err.kind != .None {
+		copy(err.table[:len(err.table) - 1], schema.name)
+	}
 	// Error metadata must be attached before returning; defer observes a copy.
 	if free_error := release_owned_cstring(sql); free_error != nil {
 		if err.kind == .None {
@@ -197,7 +217,9 @@ backup_file :: proc(source: ^SQLite_DB, path: string) -> Database_Error {
 		error.allocator_error = free_error
 	}
 
-	if error.kind == .None do error = backup_copy(source, destination)
+	if error.kind == .None {
+		error = backup_copy(source, destination)
+	}
 
 	if destination != nil {
 		close_code := sqlite3_close(destination)
@@ -211,7 +233,9 @@ backup_file :: proc(source: ^SQLite_DB, path: string) -> Database_Error {
 		}
 	}
 
-	if error.kind != .None do backup_remove_incomplete(path)
+	if error.kind != .None {
+		backup_remove_incomplete(path)
+	}
 
 	return error
 }
@@ -228,17 +252,29 @@ backup_copy :: proc(source, destination: ^SQLite_DB) -> Database_Error {
 
 	for time.tick_since(started) <= BACKUP_TIMEOUT {
 		result = sqlite3_backup_step(backup, BACKUP_PAGE_BATCH)
-		if result == .DONE do break
-		if result != .OK && result != .BUSY && result != .LOCKED do break
-		if result != .OK do time.sleep(time.Millisecond)
+		if result == .DONE {
+			break
+		}
+		if result != .OK && result != .BUSY && result != .LOCKED {
+			break
+		}
+		if result != .OK {
+			time.sleep(time.Millisecond)
+		}
 	}
 
-	if result == .OK do result = .BUSY // The last batch succeeded but the deadline expired.
+	if result == .OK {
+		result = .BUSY // The last batch succeeded but the deadline expired.
+	}
 	finish_code := sqlite3_backup_finish(backup)
-	if result == .DONE && finish_code == .OK do return {}
+	if result == .DONE && finish_code == .OK {
+		return {}
+	}
 	primary_code := finish_code if result == .DONE else result
 	error := make_error(.Execution_Failed, "SQLite backup did not complete", sqlite_code = primary_code)
-	if finish_code != .OK && finish_code != primary_code do error.cleanup_code = finish_code
+	if finish_code != .OK && finish_code != primary_code {
+		error.cleanup_code = finish_code
+	}
 
 	return error
 }

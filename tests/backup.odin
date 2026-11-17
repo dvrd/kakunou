@@ -23,7 +23,9 @@ database_backup_copies_rows_and_preserves_existing_destination :: proc(t: ^testi
 	defer testing.expect_value(t, os.remove_all(directory), nil)
 	path := fmt.aprintf("%s/copy.sqlite", directory)
 	database, ready := test_insert_database(t)
-	if !ready do return
+	if !ready {
+		return
+	}
 	defer testing.expect_value(t, db.sqlite3_close(database), .OK)
 	testing.expect_value(t, db.insert(database, "INSERT INTO items VALUES(1, 'saved')", nil).kind, .None)
 	testing.expect_value(t, db.backup_file(database, path).kind, .None)
@@ -96,7 +98,9 @@ backup_timeout_removes_incomplete_destination_and_keeps_source_transaction :: pr
 	defer testing.expect_value(t, os.remove_all(directory), nil)
 	path := fmt.aprintf("%s/incomplete.sqlite", directory)
 	database, ready := test_insert_database(t)
-	if !ready do return
+	if !ready {
+		return
+	}
 	defer db.close(database)
 
 	if !testing.expect_value(t, db.begin_immediate(database).kind, .None) {

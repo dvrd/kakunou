@@ -8,7 +8,9 @@ import "core:strings"
 test_database_count :: proc(t: ^testing.T, database: ^db.SQLite_DB, sql: cstring, expected: i64) -> bool {
 	decode :: proc(statement: ^db.SQLite_Statement, count: ^i64) -> db.Database_Error {
 		value, err := db.column_int(statement, 0)
-		if err.kind != .None do return err
+		if err.kind != .None {
+			return err
+		}
 		count^ = value
 
 		return {}
@@ -28,10 +30,14 @@ test_database_count :: proc(t: ^testing.T, database: ^db.SQLite_DB, sql: cstring
 
 test_insert_database :: proc(t: ^testing.T) -> (database: ^db.SQLite_DB, ok: bool) {
 	err := db.open(&database, ":memory:")
-	if !testing.expect(t, err.kind == .None, "open insert fixture") do return
+	if !testing.expect(t, err.kind == .None, "open insert fixture") {
+		return
+	}
 
 	defer {
-		if !ok do testing.expect(t, db.sqlite3_close(database) == .OK, "close failed insert fixture")
+		if !ok {
+			testing.expect(t, db.sqlite3_close(database) == .OK, "close failed insert fixture")
+		}
 	}
 
 	err = db.create_table(
