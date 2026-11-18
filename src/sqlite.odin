@@ -65,6 +65,8 @@ SQLITE_OPEN_CREATE :: 0x00000004
 SQLITE_OPEN_FULLMUTEX :: 0x00010000
 
 foreign sqlite {
+	sqlite3_busy_timeout :: proc "c" (database: ^SQLite_DB, milliseconds: i32) -> SQLite_Result ---
+	sqlite3_changes :: proc "c" (database: ^SQLite_DB) -> i32 ---
 	sqlite3_db_mutex :: proc "c" (database: ^SQLite_DB) -> ^SQLite_Mutex ---
 	sqlite3_mutex_enter :: proc "c" (mutex: ^SQLite_Mutex) ---
 	sqlite3_mutex_leave :: proc "c" (mutex: ^SQLite_Mutex) ---
@@ -405,21 +407,11 @@ sqlite_failure :: proc(database: ^SQLite_DB, code: SQLite_Result) -> Database_Er
 
 // The returned strings borrow the supplied error.
 error_message :: proc(err: ^Database_Error) -> string {
-	return error_text(err.message[:])
+	return strings.truncate_to_byte(cast(string)err.message[:], 0)
 }
 
 error_subject :: proc(err: ^Database_Error) -> string {
-	return error_text(err.subject[:])
-}
-
-// The returned string borrows the supplied error's buffer.
-error_text :: proc(buffer: []u8) -> string {
-	text := cast(string)(buffer)
-	if end := strings.index_byte(text, 0); end >= 0 {
-		text = text[:end]
-	}
-
-	return text
+	return strings.truncate_to_byte(cast(string)err.subject[:], 0)
 }
 
 log_error :: proc(err: Database_Error, operation := "Database operation failed") {

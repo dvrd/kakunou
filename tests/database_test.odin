@@ -453,3 +453,38 @@ database_error_is_small_and_truncates_text :: proc(t: ^testing.T) {
 	testing.expect_value(t, db.error_message(&short), "short")
 	testing.expect_value(t, db.error_subject(&short), "path/to/file")
 }
+
+@(test)
+database_changes_counts_rows_updated :: proc(t: ^testing.T) {
+	database, ready := test_insert_database(t)
+	if !ready {
+		return
+	}
+
+	defer db.close(database)
+
+	err := db.execute_sql(database, "INSERT INTO items(id,title) VALUES(1,'one'),(2,'two'),(3,'three');")
+	if !testing.expect(t, err.kind == .None, "seed rows") {
+		return
+	}
+
+	err = db.execute_sql(database, "UPDATE items SET title = title || '!' WHERE id >= 2;")
+	if !testing.expect(t, err.kind == .None, "update rows") {
+		return
+	}
+
+	testing.expect_value(t, db.sqlite3_changes(database), 2)
+}
+
+@(test)
+database_busy_timeout_is_accepted :: proc(t: ^testing.T) {
+	database: ^db.SQLite_DB
+	err := db.open(&database, ":memory:")
+	if !testing.expect(t, err.kind == .None, "open busy timeout fixture") {
+		return
+	}
+
+	defer db.close(database)
+
+	testing.expect_value(t, db.sqlite3_busy_timeout(database, 250), db.SQLite_Result.OK)
+}
