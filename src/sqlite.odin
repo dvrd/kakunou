@@ -273,6 +273,8 @@ last_insert_rowid :: proc(database: ^SQLite_DB) -> i64 {
 
 // Caller holds the connection mutex. A nil statement with no error means the
 // SQL held no statement; empty names that case in the returned error.
+// These helpers prepare one statement. A second statement is rejected before
+// execution, and the caller still finalizes the prepared statement.
 prepare :: proc(
 	database: ^SQLite_DB,
 	sql: cstring,
@@ -281,13 +283,86 @@ prepare :: proc(
 	statement: ^SQLite_Statement,
 	err: Database_Error,
 ) {
-	result := sqlite3_prepare_v2(database, sql, -1, &statement, nil)
+	tail: cstring
+	result := sqlite3_prepare_v2(database, sql, -1, &statement, &tail)
 	if result != .OK {
 		err = sqlite_failure(database, result)
 	} else if statement == nil {
 		err = make_error(.Execution_Failed, empty, sqlite_code = .MISUSE)
+	} else if sql_tail_has_statement(tail) {
+		err = make_error(.Execution_Failed, "SQL contains more than one statement", sqlite_code = .MISUSE)
 	}
 	return
+}
+
+// SQLite leaves the unparsed tail, including the trailing NUL. Whitespace and
+// comments are not another statement. Block comments nest, as they do in SQLite.
+sql_tail_has_statement :: proc(tail: cstring) -> bool {
+	if tail == nil {
+		return false
+	}
+
+	return len(skip_sql_trivia(cast(string)tail)) > 0
+}
+
+skip_sql_trivia :: proc(sql: string) -> string {
+	rest := sql
+	for len(rest) > 0 {
+		switch rest[0] {
+		case ' ', '\t', '\n', '\r', '\v', '\f':
+			rest = rest[1:]
+		case '-':
+			if len(rest) < 2 || rest[1] != '-' {
+				return rest
+			}
+
+			rest = rest[2:]
+			for len(rest) > 0 && rest[0] != '\n' {
+				rest = rest[1:]
+			}
+		case '/':
+			if len(rest) < 2 || rest[1] != '*' {
+				return rest
+			}
+
+			remainder, closed := skip_sql_block_comment(rest[2:])
+			if !closed {
+				return rest
+			}
+
+			rest = remainder
+		case:
+			return rest
+		}
+	}
+
+	return rest
+}
+
+skip_sql_block_comment :: proc(body: string) -> (rest: string, closed: bool) {
+	depth := 1
+	index := 0
+	for depth > 0 {
+		if index >= len(body) {
+			return body, false
+		}
+
+		if index + 1 < len(body) && body[index] == '/' && body[index + 1] == '*' {
+			depth += 1
+			index += 2
+			continue
+		}
+
+		if index + 1 < len(body) && body[index] == '*' && body[index + 1] == '/' {
+			depth -= 1
+			index += 2
+			continue
+		}
+
+		index += 1
+	}
+
+	return body[index:], true
 }
 
 // Finalize before taking a return-value snapshot. Odin defers cannot modify a

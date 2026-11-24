@@ -160,6 +160,70 @@ query_many_finalizes_prepare_bind_step_and_decoder_failure_paths :: proc(t: ^tes
 }
 
 @(test)
+single_statement_apis_reject_a_second_statement_before_execution :: proc(t: ^testing.T) {
+	database, ready := test_insert_database(t)
+	if !ready {
+		return
+	}
+	defer testing.expect_value(t, db.sqlite3_close(database), .OK)
+
+	inserted := db.insert(
+		database,
+		"INSERT INTO items(id,title) VALUES(1,'kept'); INSERT INTO items(id,title) VALUES(2,'lost');",
+		nil,
+	)
+	testing.expect_value(t, inserted.kind, .Execution_Failed)
+	testing.expect_value(t, inserted.sqlite_code, .MISUSE)
+	testing.expect_value(t, db.error_message(&inserted), "SQL contains more than one statement")
+	test_database_count(t, database, "SELECT COUNT(*) FROM items", 0)
+
+	rows, query_error := db.query_many(database, "SELECT 1; SELECT 2", nil, test_query_integer)
+	testing.expect(t, rows == nil)
+	testing.expect_value(t, query_error.kind, .Execution_Failed)
+	testing.expect_value(t, query_error.sqlite_code, .MISUSE)
+	testing.expect_value(t, db.error_message(&query_error), "SQL contains more than one statement")
+
+	value: i64
+	found, one_error := db.query_one(database, "SELECT 1; /* leftover */ SELECT 2", nil, &value, test_query_integer)
+	testing.expect(t, !found)
+	testing.expect_value(t, one_error.sqlite_code, .MISUSE)
+	testing.expect_value(t, value, 0)
+
+	unclosed := db.insert(database, "INSERT INTO items(id,title) VALUES(4,'no'); /* unfinished", nil)
+	testing.expect_value(t, unclosed.sqlite_code, .MISUSE)
+	testing.expect_value(t, db.error_message(&unclosed), "SQL contains more than one statement")
+
+	// SQLite skips leading semicolons and prepares the next statement.
+	leading := db.insert(database, "; INSERT INTO items(id,title) VALUES(9,'leading')", nil)
+	testing.expect_value(t, leading.kind, .None)
+	hidden := db.insert(
+		database,
+		"; INSERT INTO items(id,title) VALUES(8,'hidden'); INSERT INTO items(id,title) VALUES(7,'lost');",
+		nil,
+	)
+	testing.expect_value(t, hidden.sqlite_code, .MISUSE)
+	testing.expect_value(t, db.error_message(&hidden), "SQL contains more than one statement")
+	test_database_count(t, database, "SELECT COUNT(*) FROM items", 1)
+
+	kept := db.insert(
+		database,
+		"INSERT INTO items(id,title) VALUES(1,'kept'); -- done\n/* outer /* inner */ tail */",
+		nil,
+	)
+	testing.expect_value(t, kept.kind, .None)
+	found, one_error = db.query_one(
+		database,
+		"SELECT COUNT(*) FROM items; /* check */",
+		nil,
+		&value,
+		test_query_integer,
+	)
+	testing.expect(t, found)
+	testing.expect_value(t, one_error.kind, .None)
+	testing.expect_value(t, value, 2)
+}
+
+@(test)
 query_many_retains_finalize_error_alongside_the_primary_decoder_failure :: proc(t: ^testing.T) {
 	arena: mem.Dynamic_Arena
 	mem.dynamic_arena_init(&arena)
