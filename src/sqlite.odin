@@ -295,14 +295,20 @@ prepare :: proc(
 	return
 }
 
-// SQLite leaves the unparsed tail, including the trailing NUL. Whitespace and
-// comments are not another statement. Block comments nest, as they do in SQLite.
+// SQLite leaves the unparsed tail, including the trailing NUL. Whitespace,
+// comments, and semicolon-only statements are not another statement. Block
+// comments nest, as they do in SQLite.
 sql_tail_has_statement :: proc(tail: cstring) -> bool {
 	if tail == nil {
 		return false
 	}
 
-	return len(skip_sql_trivia(cast(string)tail)) > 0
+	rest := skip_sql_trivia(cast(string)tail)
+	for len(rest) > 0 && rest[0] == ';' {
+		rest = skip_sql_trivia(rest[1:])
+	}
+
+	return len(rest) > 0
 }
 
 skip_sql_trivia :: proc(sql: string) -> string {

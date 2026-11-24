@@ -173,13 +173,17 @@ insert_statement :: proc(
 	if error.kind != .None {
 		return error
 	}
-	result := sqlite3_step(statement)
-	if result == .ROW {
-		return make_error(.Execution_Failed, "Insert must not return rows", sqlite_code = result)
+
+	// Step reports SQLITE_ROW only after the write, and finalize then commits it.
+	if sqlite3_column_count(statement) != 0 {
+		return make_error(.Execution_Failed, "Insert must not return rows", sqlite_code = .MISUSE)
 	}
+
+	result := sqlite3_step(statement)
 	if result != .DONE {
 		return sqlite_failure(database, result)
 	}
+
 	return {}
 }
 

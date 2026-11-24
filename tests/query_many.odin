@@ -224,6 +224,75 @@ single_statement_apis_reject_a_second_statement_before_execution :: proc(t: ^tes
 }
 
 @(test)
+single_statement_apis_ignore_semicolon_only_tails :: proc(t: ^testing.T) {
+	arena: mem.Dynamic_Arena
+	mem.dynamic_arena_init(&arena)
+	defer mem.dynamic_arena_destroy(&arena)
+	context.temp_allocator = mem.dynamic_arena_allocator(&arena)
+	database, ready := test_insert_database(t)
+	if !ready {
+		return
+	}
+	defer testing.expect_value(t, db.sqlite3_close(database), .OK)
+
+	for sql, index in ([]cstring {
+			"INSERT INTO items(id,title) VALUES(1,'a');;",
+			"INSERT INTO items(id,title) VALUES(2,'b');\n;",
+			"INSERT INTO items(id,title) VALUES(3,'c'); ;",
+			"INSERT INTO items(id,title) VALUES(4,'d'); -- tail\n;",
+			"INSERT INTO items(id,title) VALUES(5,'e'); /* note */;",
+			"INSERT INTO items(id,title) VALUES(6,'f');;;",
+		}) {
+		inserted := db.insert(database, sql, nil)
+		testing.expectf(t, inserted.kind == .None, "empty tail %d: %s", index, db.error_message(&inserted))
+	}
+
+	hidden := db.insert(
+		database,
+		"INSERT INTO items(id,title) VALUES(7,'no'); ; INSERT INTO items(id,title) VALUES(8,'lost');",
+		nil,
+	)
+	testing.expect_value(t, hidden.sqlite_code, .MISUSE)
+	testing.expect_value(t, db.error_message(&hidden), "SQL contains more than one statement")
+	unclosed := db.insert(database, "INSERT INTO items(id,title) VALUES(9,'no');; /* unfinished", nil)
+	testing.expect_value(t, unclosed.sqlite_code, .MISUSE)
+	testing.expect_value(t, db.error_message(&unclosed), "SQL contains more than one statement")
+	test_database_count(t, database, "SELECT COUNT(*) FROM items", 6)
+
+	value: i64
+	found, error := db.query_one(database, "SELECT COUNT(*) FROM items;;", nil, &value, test_query_integer)
+	testing.expect(t, found)
+	testing.expect_value(t, error.kind, .None)
+	testing.expect_value(t, value, 6)
+	rows, query_error := db.query_many(database, "SELECT 1;;", nil, test_query_integer)
+	testing.expect_value(t, query_error.kind, .None)
+	if testing.expect_value(t, len(rows), 1) {
+		testing.expect_value(t, rows[0], 1)
+	}
+	rows, query_error = db.query_many(database, "SELECT 1; ; SELECT 2", nil, test_query_integer)
+	testing.expect(t, rows == nil)
+	testing.expect_value(t, query_error.sqlite_code, .MISUSE)
+}
+
+@(test)
+insert_rejects_a_returning_statement_before_it_writes :: proc(t: ^testing.T) {
+	database, ready := test_insert_database(t)
+	if !ready {
+		return
+	}
+	defer testing.expect_value(t, db.sqlite3_close(database), .OK)
+
+	error := db.insert(database, "INSERT INTO items(id,title) VALUES(1,'returned') RETURNING id", nil)
+	testing.expect_value(t, error.kind, .Execution_Failed)
+	testing.expect_value(t, error.sqlite_code, .MISUSE)
+	testing.expect_value(t, error.cleanup_code, .OK)
+	testing.expect_value(t, db.error_message(&error), "Insert must not return rows")
+	test_database_count(t, database, "SELECT COUNT(*) FROM items", 0)
+	testing.expect_value(t, db.insert(database, "INSERT INTO items(id,title) VALUES(1,'kept')", nil).kind, .None)
+	test_database_count(t, database, "SELECT COUNT(*) FROM items", 1)
+}
+
+@(test)
 query_many_retains_finalize_error_alongside_the_primary_decoder_failure :: proc(t: ^testing.T) {
 	arena: mem.Dynamic_Arena
 	mem.dynamic_arena_init(&arena)
@@ -292,8 +361,9 @@ query_one_and_insert_surface_deferred_constraint_failures_during_finalize :: pro
 	test_database_count(t, database, "SELECT COUNT(*) FROM children", 0)
 	error := db.insert(database, query, nil)
 	testing.expect_value(t, error.kind, .Execution_Failed)
-	testing.expect_value(t, error.sqlite_code, .ROW)
-	testing.expect_value(t, error.cleanup_code, .CONSTRAINT)
+	testing.expect_value(t, error.sqlite_code, .MISUSE)
+	testing.expect_value(t, error.cleanup_code, .OK)
+	testing.expect_value(t, db.error_message(&error), "Insert must not return rows")
 	test_database_count(t, database, "SELECT COUNT(*) FROM children", 0)
 }
 
