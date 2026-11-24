@@ -97,8 +97,6 @@ tasks:
             rm -rf -- "$scratch"
         }
         trap cleanup EXIT
-        trap 'exit 130' INT
-        trap 'exit 143' TERM
         git tag --list 'v*' > "$scratch/tags"
         base=$("$tool" latest "$scratch/tags")
         [ -n "$base" ] || { printf 'kakunou: no release tag\n' >&2; exit 1; }
