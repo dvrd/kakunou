@@ -2,7 +2,10 @@ package tests
 
 import db "shared:kakunou"
 import "base:runtime"
+import "core:fmt"
 import "core:mem"
+import "core:os"
+import "core:strings"
 import "core:sync"
 import "core:testing"
 import "core:thread"
@@ -486,5 +489,80 @@ database_busy_timeout_is_accepted :: proc(t: ^testing.T) {
 
 	defer db.close(database)
 
+	test_database_count(t, database, "PRAGMA busy_timeout;", db.BUSY_TIMEOUT_MILLISECONDS)
 	testing.expect_value(t, db.sqlite3_busy_timeout(database, 250), db.SQLite_Result.OK)
+	test_database_count(t, database, "PRAGMA busy_timeout;", 250)
+}
+
+@(test)
+database_second_connection_waits_for_a_write_lock :: proc(t: ^testing.T) {
+	arena: mem.Dynamic_Arena
+	mem.dynamic_arena_init(&arena)
+	defer mem.dynamic_arena_destroy(&arena)
+	context.allocator = mem.dynamic_arena_allocator(&arena)
+	directory, directory_error := os.make_directory_temp("", "kakunou-busy-*", context.allocator)
+	if !testing.expect_value(t, directory_error, nil) {
+		return
+	}
+	defer testing.expect_value(t, os.remove_all(directory), nil)
+	path := strings.clone_to_cstring(fmt.aprintf("%s/busy.sqlite", directory))
+	holder: ^db.SQLite_DB
+	if !testing.expect_value(t, db.open(&holder, path).kind, .None) {
+		return
+	}
+	defer db.close(holder)
+	contender: ^db.SQLite_DB
+	if !testing.expect_value(t, db.open(&contender, path).kind, .None) {
+		return
+	}
+	defer db.close(contender)
+	err := db.execute_sql(holder, "CREATE TABLE items(id INTEGER PRIMARY KEY, title TEXT NOT NULL UNIQUE);")
+	if !testing.expect(t, err.kind == .None, "create shared table") {
+		return
+	}
+	err = db.begin_immediate(holder)
+	if !testing.expect(t, err.kind == .None, "hold the write lock") {
+		return
+	}
+	outer_open := true
+	defer if outer_open {
+		db.rollback_transaction(holder)
+	}
+	err = db.insert(holder, "INSERT INTO items(id,title) VALUES(1,'holder');", nil)
+	if !testing.expect(t, err.kind == .None, "write while holding the lock") {
+		return
+	}
+	state := Database_Transaction_Worker {
+		database = contender,
+	}
+	worker := thread.create_and_start_with_data(&state, database_transaction_worker, runtime.default_context())
+	if !testing.expect(t, worker != nil, "start second connection") {
+		return
+	}
+	defer {
+		if outer_open {
+			db.rollback_transaction(holder)
+			outer_open = false
+		}
+		thread.destroy(worker)
+	}
+	if !testing.expect(t, sync.sema_wait_with_timeout(&state.started, 2 * time.Second), "second connection starts") {
+		return
+	}
+	testing.expect(
+		t,
+		!sync.sema_wait_with_timeout(&state.finished, 100 * time.Millisecond),
+		"second connection waits instead of returning SQLITE_BUSY immediately",
+	)
+	err = db.commit_transaction(holder)
+	outer_open = false
+	testing.expect(t, err.kind == .None, "holder commits")
+	testing.expect(
+		t,
+		sync.sema_wait_with_timeout(&state.finished, time.Second),
+		"second connection proceeds after the lock is released",
+	)
+	thread.join(worker)
+	testing.expect(t, state.err.kind == .None, "second connection writes after waiting")
+	test_database_count(t, holder, "SELECT COUNT(*) FROM items;", 2)
 }

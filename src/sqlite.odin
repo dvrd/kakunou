@@ -64,6 +64,10 @@ SQLITE_OPEN_READWRITE :: 0x00000002
 SQLITE_OPEN_CREATE :: 0x00000004
 SQLITE_OPEN_FULLMUTEX :: 0x00010000
 
+// open installs this wait on every connection. A second connection otherwise
+// receives SQLITE_BUSY immediately, and Saba only passes the handle through.
+BUSY_TIMEOUT_MILLISECONDS :: 5000
+
 foreign sqlite {
 	sqlite3_busy_timeout :: proc "c" (database: ^SQLite_DB, milliseconds: i32) -> SQLite_Result ---
 	sqlite3_changes :: proc "c" (database: ^SQLite_DB) -> i32 ---
@@ -140,6 +144,10 @@ open :: proc(database: ^^SQLite_DB, path: cstring) -> Database_Error {
 	result := sqlite3_open_v2(path, database, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX, nil)
 
 	mutex_missing := result == .OK && connection_mutex(database^) == nil
+
+	if result == .OK && !mutex_missing {
+		result = sqlite3_busy_timeout(database^, BUSY_TIMEOUT_MILLISECONDS)
+	}
 
 	if result != .OK || mutex_missing {
 		message := "Could not allocate database connection"
