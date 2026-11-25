@@ -243,9 +243,18 @@ single_statement_apis_reject_a_second_statement_before_execution :: proc(t: ^tes
 	testing.expect_value(t, db.error_message(&hidden), "SQL contains more than one statement")
 	test_database_count(t, database, "SELECT COUNT(*) FROM items", 1)
 
+	for sql in ([]cstring {
+		"INSERT INTO items(id,title) VALUES(5,'no'); /* outer /* inner */ tail */",
+		"INSERT INTO items(id,title) VALUES(6,'vertical');\v",
+	}) {
+		rejected := db.insert(database, sql, nil)
+		testing.expect_value(t, rejected.sqlite_code, .MISUSE)
+	}
+	test_database_count(t, database, "SELECT COUNT(*) FROM items", 1)
+
 	kept := db.insert(
 		database,
-		"INSERT INTO items(id,title) VALUES(1,'kept'); -- done\n/* outer /* inner */ tail */",
+		"INSERT INTO items(id,title) VALUES(1,'kept'); -- done\n/* comment */ /* another */\ufeff \v",
 		nil,
 	)
 	testing.expect_value(t, kept.kind, .None)

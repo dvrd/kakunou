@@ -317,7 +317,7 @@ prepare :: proc(
 
 // SQLite leaves the unparsed tail, including the trailing NUL. Whitespace,
 // comments, and semicolon-only statements are not another statement. Block
-// comments nest, as they do in SQLite.
+// comments end at the first closer; a missing closer is rejected.
 sql_tail_has_statement :: proc(tail: cstring) -> bool {
 	if tail == nil {
 		return false
@@ -335,8 +335,17 @@ skip_sql_trivia :: proc(sql: string) -> string {
 	rest := sql
 	for len(rest) > 0 {
 		switch rest[0] {
-		case ' ', '\t', '\n', '\r', '\v', '\f':
+		case ' ', '\t', '\n', '\r', '\f':
+			// SQLite accepts a vertical tab only inside a whitespace token.
 			rest = rest[1:]
+			for len(rest) > 0 && rest[0] == '\v' {
+				rest = rest[1:]
+			}
+		case 0xef:
+			if !strings.has_prefix(rest, "\ufeff") {
+				return rest
+			}
+			rest = rest[len("\ufeff"):]
 		case '-':
 			if len(rest) < 2 || rest[1] != '-' {
 				return rest
@@ -366,29 +375,11 @@ skip_sql_trivia :: proc(sql: string) -> string {
 }
 
 skip_sql_block_comment :: proc(body: string) -> (rest: string, closed: bool) {
-	depth := 1
-	index := 0
-	for depth > 0 {
-		if index >= len(body) {
-			return body, false
-		}
-
-		if index + 1 < len(body) && body[index] == '/' && body[index + 1] == '*' {
-			depth += 1
-			index += 2
-			continue
-		}
-
-		if index + 1 < len(body) && body[index] == '*' && body[index + 1] == '/' {
-			depth -= 1
-			index += 2
-			continue
-		}
-
-		index += 1
+	end := strings.index(body, "*/")
+	if end < 0 {
+		return body, false
 	}
-
-	return body[index:], true
+	return body[end + 2:], true
 }
 
 // Finalize before taking a return-value snapshot. Odin defers cannot modify a
