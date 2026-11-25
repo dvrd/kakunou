@@ -61,3 +61,9 @@ On Linux or macOS, a single backup publisher can maintain a last-known-good snap
 3. To restore, copy `latest.sqlite` to a fresh database path. Open the copy, require `PRAGMA integrity_check` to return `ok`, and verify an application-level invariant before switching traffic. Ignore staging files during restore.
 
 The recovery test kills a backup worker while a separate connection holds a write transaction, then opens a restored copy and checks its integrity, row count, and sum of IDs. Repeat the drill with your production database size, journal mode, and write rate. This drill covers process termination. Power-loss durability also depends on filesystem and storage flush guarantees. [Recovery rehearsal](tests/integration/backup_recovery_test.odin)
+
+## Preparing a release
+
+Commit your changes on `develop`, fetch and merge `origin/main`, then run `task version:prepare`. It derives the version from the literal on `origin/main` and the Conventional Commits introduced by the PR. Commit the updated `src/version.odin` before opening or updating the PR to `main`. Use a merge commit to preserve the reviewed history.
+
+The required `check` verifies the literal and runs all suites. After merge, CI repeats both checks on the exact merged commit. A fresh runner creates the annotated tag and GitHub release when the version increases. For a failed publication, rerun the original Actions run. Its tag identifies both the checked commit and the run. Documentation-only merges keep the current version and finish after verification.

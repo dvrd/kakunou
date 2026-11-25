@@ -10,52 +10,64 @@ permissions:
 
 jobs:
   check:
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup-toolchain
-      - run: task check
+      - name: Verify prepared version
+        id: version
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+          [[ $(git rev-parse HEAD) == "$GITHUB_SHA" ]]
+          tag=$(odin run tools/version -out:"$RUNNER_TEMP/kakunou-ci-version" -- verify "$BASE")
+          printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
+      - run: task check PACKAGE=all INTERNAL=0
 
-  release:
-    if: github.event_name == 'push'
+  publish:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.check.outputs.tag != ''
+    needs: check
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     concurrency:
-      group: release-main
+      group: publish-${{ github.sha }}
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          ref: main
-          fetch-depth: 0
-      - uses: ./.github/actions/setup-toolchain
-      - name: Check and tag the release
-        id: version
-        run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          next=$(task version:next)
-          task release
-          if [[ -n "$next" ]]; then
-            git push --atomic origin HEAD:refs/heads/main "refs/tags/$next"
-            echo "tag=$next" >> "$GITHUB_OUTPUT"
-          else
-            # A rerun can resume publication after a successful atomic push.
-            tag=$(task version)
-            if [[ $(git log -1 --format=%ae "$tag") == '41898282+github-actions[bot]@users.noreply.github.com' ]]; then
-              echo "tag=$tag" >> "$GITHUB_OUTPUT"
-            fi
-          fi
-      - name: Publish GitHub release
-        if: steps.version.outputs.tag != ''
+      - name: Publish the verified merge
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.version.outputs.tag }}
+          TAG: ${{ needs.check.outputs.tag }}
         run: |
-          if ! gh release view "$TAG" >/dev/null; then
-            gh release create "$TAG" --verify-tag --generate-notes --title "$TAG"
+          set -euo pipefail
+          component='(0|[1-9][0-9]{0,8})'
+          [[ $TAG =~ ^v$component\.$component\.$component$ ]]
+          [[ $GITHUB_SHA =~ ^[0-9a-f]{40}$ && $GITHUB_RUN_ID =~ ^[0-9]+$ ]]
+
+          gh auth setup-git
+          git init -q --bare "$RUNNER_TEMP/publish.git"
+          cd "$RUNNER_TEMP/publish.git"
+          git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"
+          git fetch --no-tags --depth=1 origin "$GITHUB_SHA"
+          [[ $(git rev-parse 'FETCH_HEAD^{commit}') == "$GITHUB_SHA" ]]
+
+          # Stable tag bytes bind retries of this workflow run to the checked merge.
+          export GIT_COMMITTER_NAME='github-actions[bot]'
+          export GIT_COMMITTER_EMAIL='41898282+github-actions[bot]@users.noreply.github.com'
+          timestamp=$(git show -s --format=%ct "$GITHUB_SHA")
+          export GIT_COMMITTER_DATE="@$timestamp +0000"
+          git tag --no-sign -a "$TAG" "$GITHUB_SHA" -m "kakunou $TAG (Actions run $GITHUB_RUN_ID)"
+          git push --no-follow-tags origin "refs/tags/$TAG:refs/tags/$TAG"
+
+          if existing=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json tagName,isDraft,isPrerelease --jq 'select(.isDraft == false and .isPrerelease == false) | .tagName'); then
+            [[ "$existing" == "$TAG" ]]
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --target "$GITHUB_SHA" --generate-notes --title "$TAG"
           fi

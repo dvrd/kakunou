@@ -89,6 +89,42 @@ repository_version :: proc(releasing: bool) -> bool {
 	return release(branch, head, base, next)
 }
 
+// Compare with the protected main commit, even when its tag has not been
+// published yet. Merge subjects vary between GitHub's preview and final merge.
+prepared_version :: proc(base_ref: string, prepare: bool) -> bool {
+	base := command_output("git", "rev-parse", "--verify", strings.concatenate({base_ref, "^{commit}"})) or_return
+	_ = command_output("git", "merge-base", "--is-ancestor", base, "HEAD") or_return
+	if !prepare {
+		parent := command_output("git", "rev-parse", "HEAD^1") or_return
+		if parent != base {
+			fmt.eprintln("kakunou: expected the event base to be the first parent of the checked commit")
+			return false
+		}
+	}
+	prior_source := command_bytes("git", "cat-file", "blob", fmt.tprintf("%s:%s", base, VERSION_PATH)) or_return
+	prior, _ := version_literal(prior_source) or_return
+	messages := command_bytes("git", "log", "--no-merges", "-z", "--format=%B", fmt.tprintf("%s..HEAD", base)) or_return
+	next := next_tag(prior, messages) or_return
+	expected := next if next != "" else prior
+	source := read_file(VERSION_PATH) or_return
+	current, offset := version_literal(source) or_return
+	if current != expected {
+		if !prepare {
+			fmt.eprintln("kakunou: expected VERSION", expected, "in", VERSION_PATH, "— run task version:prepare on develop")
+			return false
+		}
+		updated := strings.concatenate({source[:offset], expected, source[offset+len(current):]})
+		if err := os.write_entire_file(VERSION_PATH, updated); err != nil {
+			fmt.eprintln("kakunou: cannot prepare VERSION", err)
+			return false
+		}
+	}
+	if next != "" {
+		fmt.println(next)
+	}
+	return true
+}
+
 release_check :: proc(dir: string) -> bool {
 	environment, env_err := os.environ(context.allocator)
 	if env_err != nil {

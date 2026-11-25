@@ -41,6 +41,12 @@ tasks:
     cmds:
       - '"$KAKUNOU_COMPILER" run tools/version -out:"{{.RUNNER}}" -- next'
 
+  version:prepare:
+    desc: Prepare the version literal for a pull request against origin/main
+    silent: true
+    cmds:
+      - '"$KAKUNOU_COMPILER" run tools/version -out:"{{.RUNNER}}" -- prepare'
+
   release:
     desc: Check the tree, commit the next release tag, and annotate it
     cmds:

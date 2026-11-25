@@ -214,3 +214,14 @@ tasks:
 	testing.expect_value(t, git(t, repo, env[:], "status", "--porcelain"), "")
 	testing.expect_value(t, release_cli(t, repo, env[:], {tool, "current"}), "v0.2.1")
 }
+
+@(test)
+release_workflow_verifies_prepared_merges_and_resumes_only_its_own_tag :: proc(t: ^testing.T) {
+	context.allocator = context.temp_allocator
+	dir, err := os.make_directory_temp("", "kakunou-publish-*", context.allocator)
+	if !testing.expect_value(t, err, nil) {
+		return
+	}
+	defer os.remove_all(dir)
+	release_cli(t, ".", nil, {"bash", "tests/integration/fixtures/release_workflow.sh", dir})
+}
