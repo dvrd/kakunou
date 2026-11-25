@@ -242,6 +242,9 @@ backup_file_with_timeout :: proc(source: ^SQLite_DB, path: string, timeout: time
 	// Resolve the existing parent before creating the file. An absolute path
 	// also makes SQLite treat names such as ":memory:" and "file:..." literally.
 	parent, basename := os.split_path(path)
+	if parent == "" {
+		parent = "."
+	}
 	directory, dir_error := os.get_absolute_path(parent, context.allocator)
 	if dir_error != nil {
 		if alloc_error, ok := dir_error.(mem.Allocator_Error); ok {
