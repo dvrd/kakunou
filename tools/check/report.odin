@@ -117,9 +117,11 @@ show_status :: proc(p: ^Progress, snapshot := false) {
 	if (!p.live && !snapshot) || len(p.active) == 0 {
 		return
 	}
-	width, height, ok := terminal.get_terminal_size()
-	if !ok {
-		width, height = 80, 24
+	width, height := 80, 24
+	when #defined(terminal.get_terminal_size) {
+		if w, h, ok := terminal.get_terminal_size(); ok {
+			width, height = w, h
+		}
 	}
 	if snapshot {
 		width, height = max(int), max(int)
