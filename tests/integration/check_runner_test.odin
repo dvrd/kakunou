@@ -26,9 +26,14 @@ runner_validates_selectors_across_suites_in_a_renamed_checkout :: proc(t: ^testi
 	   !write(t, root, "tests/alpha/alpha_test.odin", `package alpha
 import "core:testing"
 import "core:time"
+import "core:os"
 import db "shared:kakunou"
 @(test)
 local_alias :: proc(t: ^testing.T) {
+	stage := os.get_env("KAKUNOU_STAGED_ROOT", context.temp_allocator)
+	info, err := os.stat(stage, context.temp_allocator)
+	testing.expect_value(t, err, nil)
+	testing.expect_value(t, info.mode & os.Permissions_All, os.Permissions{.Read_User, .Write_User, .Execute_User})
 	time.sleep(1300 * time.Millisecond)
 	testing.expect_value(t, db.TOKEN, 42)
 }
@@ -115,4 +120,60 @@ tag_excluded :: proc(t: ^testing.T) { testing.expect(t, false) }
 	}
 	resolved := execute(t, root, runner, compiler, "beta.conditional", true, quiet = true)
 	testing.expect(t, !strings.contains(resolved, "PASS  beta.conditional"), resolved)
+}
+
+@(test)
+task_build_cleans_default_outputs_and_keeps_explicit_outputs :: proc(t: ^testing.T) {
+	context.allocator = context.temp_allocator
+	tmp, dir_err := os.make_directory_temp("", "kakunou build fixture-*", context.allocator)
+	if !testing.expect_value(t, dir_err, nil) {
+		return
+	}
+	defer os.remove_all(tmp)
+
+	compiler := os.get_env("KAKUNOU_REAL_ODIN", context.allocator)
+	parent_env, env_err := os.environ(context.allocator)
+	if !testing.expect_value(t, env_err, nil) {
+		return
+	}
+	env: [dynamic]string
+	for entry in parent_env {
+		key, _, _ := strings.partition(entry, "=")
+		switch key {
+		case "TMPDIR", "CHECK_DIR", "KAKUNOU_CHECK_DIR", "KAKUNOU_OUT", "ODIN", "CLI_ARGS":
+			continue
+		}
+		append(&env, entry)
+	}
+	sentinel := fmt.tprintf("%s/sentinel", tmp)
+	if !testing.expect_value(t, os.make_directory(sentinel), nil) ||
+	   !testing.expect_value(t, os.write_entire_file(fmt.tprintf("%s/keep", sentinel), "fixture"), nil) {
+		return
+	}
+	append(&env, fmt.tprintf("TMPDIR=%s", tmp), fmt.tprintf("KAKUNOU_RUNNER_DIR=%s", sentinel))
+	if compiler != "" {
+		append(&env, fmt.tprintf("ODIN=%s", compiler))
+	}
+
+	for keep in ([]bool{false, true}) {
+		command: [dynamic]string
+		append(&command, "task", "build", "PACKAGE=unit", fmt.tprintf("RUNNER_DIR=%s", sentinel))
+		if keep {
+			append(&command, fmt.tprintf("CHECK_DIR=%s/artifacts", tmp))
+		}
+		state, _, logs, err := os.process_exec({env = env[:], command = command[:]}, context.allocator)
+		if !testing.expect_value(t, err, nil) || !testing.expect(t, state.success, string(logs)) {
+			return
+		}
+		files, read_err := os.read_all_directory_by_path(tmp, context.allocator)
+		testing.expect_value(t, read_err, nil)
+		for file in files {
+			testing.expect(t, !strings.has_prefix(file.name, "kakunou-task-"), file.name)
+			testing.expect(t, !strings.has_prefix(file.name, "odin-library-tests-"), file.name)
+		}
+		testing.expect(t, os.is_file(fmt.tprintf("%s/keep", sentinel)))
+		testing.expect(t, !os.exists(fmt.tprintf("%s/kakunou-check", tmp)))
+		testing.expect_value(t, os.is_file(fmt.tprintf("%s/artifacts/kakunou-version", tmp)), keep)
+		testing.expect_value(t, os.is_file(fmt.tprintf("%s/artifacts/tests/unit/kakunou-tests", tmp)), keep)
+	}
 }

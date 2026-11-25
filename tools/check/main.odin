@@ -73,7 +73,7 @@ check :: proc(args: []string) -> os.Error {
 		shared = env("KAKUNOU_SHARED", env("WEBTOOLS_SHARED", path(env("HOME"), "dev/oss/Odin/shared"))),
 		owner = env("KAKUNOU_PACKAGE", "all"),
 		internal = internal == "1" || internal == "true",
-		out = env("KAKUNOU_OUT", env("KAKUNOU_CHECK_DIR", path(env("TMPDIR", "/tmp"), "kakunou-check"))),
+		out = env("KAKUNOU_OUT", env("KAKUNOU_CHECK_DIR")),
 	}
 	rest := args[1:]
 	options: for len(rest) > 0 {
@@ -111,16 +111,11 @@ check :: proc(args: []string) -> os.Error {
 	}
 
 	root := os.get_working_directory(context.allocator) or_return
-	if !os.is_absolute_path(cfg.out) {
+	if cfg.out != "" && !os.is_absolute_path(cfg.out) {
 		cfg.out = path(root, cfg.out)
 	}
 	compiler := output(root, "which", cfg.compiler) or_return
 	cfg.compiler = os.get_absolute_path(compiler, context.allocator) or_return
-	ensure_dir(cfg.out) or_return
-	if cfg.mode == "build" {
-		run(cfg.compiler, "build", "tools/version", "-vet", "-warnings-as-errors", "-o:none",
-		    fmt.tprintf("-out:%s", path(cfg.out, "kakunou-version"))) or_return
-	}
 
 	return suites(root, &cfg)
 }

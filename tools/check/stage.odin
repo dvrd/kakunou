@@ -1,5 +1,6 @@
 package main
 
+import "../private_temp"
 import "core:fmt"
 import "core:os"
 import "core:odin/tokenizer"
@@ -84,7 +85,7 @@ collect_imports :: proc(file, boundary, shared: string, pending: ^[dynamic]strin
 }
 
 suites :: proc(root: string, cfg: ^Config) -> os.Error {
-	work := os.make_directory_temp("", "odin-library-tests-*", context.allocator) or_return
+	work := private_temp.create("odin-library-tests") or_return
 	defer os.remove_all(work)
 	repo := path(work, "repository")
 	shared := path(work, "shared")
@@ -165,6 +166,12 @@ suites :: proc(root: string, cfg: ^Config) -> os.Error {
 	selection := test_selection(cfg.flags[:])
 	shared_flag := fmt.tprintf("-collection:shared=%s", shared)
 	if cfg.mode == "build" {
+		if cfg.out == "" {
+			cfg.out = path(work, "build")
+		}
+		ensure_dir(cfg.out) or_return
+		run(cfg.compiler, "build", path(repo, "tools/version"), "-vet", "-warnings-as-errors", "-o:none",
+		    fmt.tprintf("-out:%s", path(cfg.out, "kakunou-version"))) or_return
 		run(cfg.compiler, "check", path(repo, "src"), shared_flag, "-no-entry-point", "-vet", "-warnings-as-errors") or_return
 	}
 	plans: map[string]Suite_Inventory
