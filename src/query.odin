@@ -321,6 +321,9 @@ query_many :: proc(
 	statement, err = prepare(database, sql, "Empty query")
 	if err.kind == .None {
 		err = bind_parameters(database, statement, parameters)
+	}
+
+	if err.kind == .None {
 		rows, err = query_many_rows(database, statement, decode, max_rows)
 	}
 

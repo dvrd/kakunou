@@ -168,6 +168,26 @@ query_many_finalizes_prepare_bind_step_and_decoder_failure_paths :: proc(t: ^tes
 }
 
 @(test)
+query_many_bind_failure_leaves_write_unexecuted :: proc(t: ^testing.T) {
+	database, ready := test_insert_database(t)
+	if !ready {
+		return
+	}
+	defer testing.expect_value(t, db.sqlite3_close(database), .OK)
+
+	rows, err := db.query_many(
+		database,
+		"INSERT INTO items(id, title) VALUES (?, 'unbound') RETURNING id",
+		nil,
+		test_query_integer,
+	)
+	testing.expect_value(t, err.kind, .Execution_Failed)
+	testing.expect_value(t, err.sqlite_code, .RANGE)
+	testing.expect(t, rows == nil)
+	test_database_count(t, database, "SELECT COUNT(*) FROM items", 0)
+}
+
+@(test)
 single_statement_apis_reject_a_second_statement_before_execution :: proc(t: ^testing.T) {
 	database, ready := test_insert_database(t)
 	if !ready {
