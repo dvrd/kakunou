@@ -1,0 +1,24 @@
+name: Install Odin, Task, and SQLite
+description: Set up the toolchain used by task check on Linux x86-64
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      working-directory: ${{ runner.temp }}
+      run: |
+        set -euo pipefail
+        curl --fail --silent --show-error --location --retry 3 -o odin.tar.gz \
+          https://github.com/odin-lang/Odin/releases/download/dev-2026-11a/odin-linux-amd64-dev-2026-11a.tar.gz
+        curl --fail --silent --show-error --location --retry 3 -o task.tar.gz \
+          https://github.com/go-task/task/releases/download/v3.53.1/task_linux_amd64.tar.gz
+        sha256sum --check <<'SUMS'
+        65c9f6e97d6f8a30930e151f270ce5aeaa98fe8b2ba49fe067394e2af04f7618  odin.tar.gz
+        a54a408f6861ff921f6e87774180db31bacd8c1e7c944ca696db9fea49a82fc7  task.tar.gz
+        SUMS
+        mkdir odin-sdk task-bin
+        tar -xzf odin.tar.gz -C odin-sdk --strip-components=1
+        tar -xzf task.tar.gz -C task-bin task
+        echo "$RUNNER_TEMP/odin-sdk" >> "$GITHUB_PATH"
+        echo "$RUNNER_TEMP/task-bin" >> "$GITHUB_PATH"
+        sudo apt-get update -qq
+        sudo apt-get install -y libsqlite3-dev
