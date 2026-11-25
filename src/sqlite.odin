@@ -231,11 +231,34 @@ begin_read :: proc(database: ^SQLite_DB) -> Database_Error {
 	return begin(database, "BEGIN")
 }
 
+// Accept a single BEGIN statement. SQLite parses the transaction mode and optional name.
 begin :: proc(database: ^SQLite_DB, sql: cstring) -> Database_Error {
+	if database == nil {
+		return make_error(.Execution_Failed, "Database is not open", sqlite_code = .MISUSE)
+	}
+	first := skip_sql_empty_statements(string(sql))
+	if end := strings.index_any(first, " \t\r\n\f;/-"); end >= 0 {
+		first = first[:end]
+	}
+	if !strings.equal_fold(first, "BEGIN") {
+		return make_error(.Execution_Failed, "Expected a BEGIN statement", sqlite_code = .MISUSE)
+	}
+
 	mutex := connection_mutex(database)
 	sqlite3_mutex_enter(mutex)
-
-	err := execute_sql_unlocked(database, sql)
+	was_autocommit := sqlite3_get_autocommit(database) != 0
+	statement, err := prepare(database, sql, "Expected a BEGIN statement")
+	if err.kind == .None {
+		result := sqlite3_step(statement)
+		if result != .DONE {
+			err = sqlite_failure(database, result)
+		}
+	}
+	statement_finalize(statement, &err, "Could not finalize BEGIN")
+	// An authorizer can ignore BEGIN while SQLite still reports DONE.
+	if err.kind == .None && (!was_autocommit || sqlite3_get_autocommit(database) != 0) {
+		err = make_error(.Execution_Failed, "BEGIN did not start a transaction", sqlite_code = .ERROR)
+	}
 	if err.kind != .None {
 		sqlite3_mutex_leave(mutex)
 	}
@@ -323,12 +346,17 @@ sql_tail_has_statement :: proc(tail: cstring) -> bool {
 		return false
 	}
 
-	rest := skip_sql_trivia(cast(string)tail)
+	return len(skip_sql_empty_statements(string(tail))) > 0
+}
+
+@(private)
+skip_sql_empty_statements :: proc(sql: string) -> string {
+	rest := skip_sql_trivia(sql)
 	for len(rest) > 0 && rest[0] == ';' {
 		rest = skip_sql_trivia(rest[1:])
 	}
 
-	return len(rest) > 0
+	return rest
 }
 
 skip_sql_trivia :: proc(sql: string) -> string {

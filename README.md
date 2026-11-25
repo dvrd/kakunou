@@ -51,7 +51,7 @@ insert_pair :: proc(database: ^db.SQLite_DB, limit: int) -> db.Database_Error {
 }
 ```
 
-Keep the successful begin and its matching commit or rollback on the same thread. Each consumes the transaction exactly once. A failed commit handles rollback internally and releases the connection mutex. With a fresh table, the example rolls back both rows for a limit of one and commits both for a limit of two. Returned rows borrow the caller’s temporary allocator. [Transaction regression](tests/integration/query_many_test.odin)
+Use `begin(database, sql)` for a single SQLite `BEGIN` statement when selecting a transaction mode at runtime. It validates the statement before executing it. Keep the successful begin and its matching commit or rollback on the same thread. Each consumes the transaction exactly once. A failed commit handles rollback internally and releases the connection mutex. With a fresh table, the example rolls back both rows for a limit of one and commits both for a limit of two. Returned rows borrow the caller’s temporary allocator. [Transaction regression](tests/integration/query_many_test.odin)
 
 ## Publishing and restoring backups
 

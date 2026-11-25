@@ -57,6 +57,7 @@ automatic_rollback_case :: proc(t: ^testing.T, commit: bool) {
 		db.rollback_transaction(database)
 	}
 
+	expect_transaction_mutex(t, database, .OK)
 	test_database_count(t, database, "SELECT COUNT(*) FROM items", 0)
 
 	if !testing.expect_value(t, db.begin_immediate(database).kind, .None) {

@@ -12,6 +12,113 @@ import "core:time"
 import support "../support"
 import db "shared:kakunou"
 
+foreign import sqlite "system:sqlite3"
+
+SQLite_Authorizer :: #type proc "c" (data: rawptr, action: i32, a, b, database, trigger: cstring) -> i32
+foreign sqlite {
+	sqlite3_set_authorizer :: proc "c" (database: ^db.SQLite_DB, callback: SQLite_Authorizer, data: rawptr) -> db.SQLite_Result ---
+	sqlite3_mutex_try :: proc "c" (mutex: ^db.SQLite_Mutex) -> db.SQLite_Result ---
+}
+
+// Probe from another thread because the owner's connection mutex is recursive.
+expect_transaction_mutex :: proc(t: ^testing.T, database: ^db.SQLite_DB, expected: db.SQLite_Result, loc := #caller_location) {
+	Probe :: struct {
+		mutex: ^db.SQLite_Mutex,
+		result: db.SQLite_Result,
+	}
+	probe := Probe{mutex = db.connection_mutex(database)}
+	run :: proc(data: rawptr) {
+		state := cast(^Probe)data
+		state.result = sqlite3_mutex_try(state.mutex)
+		if state.result == .OK {
+			db.sqlite3_mutex_leave(state.mutex)
+		}
+	}
+	worker := thread.create_and_start_with_data(&probe, run, runtime.default_context())
+	if !testing.expect(t, worker != nil, "start transaction mutex probe", loc = loc) {
+		return
+	}
+	thread.join(worker)
+	thread.destroy(worker)
+	testing.expect_value(t, probe.result, expected, loc)
+}
+
+@(test)
+begin_rejects_nontransaction_sql_before_it_runs :: proc(t: ^testing.T) {
+	for sql in ([]cstring{
+		nil, "", "; -- empty", "SELECT 1", "BEGIN; SELECT * FROM missing_table",
+		"INSERT INTO items VALUES(1, 'changed'); BEGIN", "BEGIN; COMMIT", "BEGIN ; SELECT 1",
+		"BEGINNING", "BEGIN_unknown", "BEGIN$extra", "BEGIN 42", "EXPLAIN BEGIN",
+	}) {
+		database, ready := test_insert_database(t)
+		if !ready {
+			return
+		}
+		err := db.begin(database, sql)
+		testing.expect_value(t, err.kind, .Execution_Failed)
+		expect_transaction_mutex(t, database, .OK)
+		testing.expect_value(t, db.sqlite3_get_autocommit(database), i32(1))
+		test_database_count(t, database, "SELECT COUNT(*) FROM items", 0)
+		if err.kind == .None {
+			db.rollback_transaction(database)
+		}
+		db.close(database)
+	}
+}
+
+@(test)
+ignored_begin_preserves_existing_transaction_ownership :: proc(t: ^testing.T) {
+	database, ready := test_insert_database(t)
+	if !ready {
+		return
+	}
+	defer db.close(database)
+	ignore_transaction :: proc "c" (data: rawptr, action: i32, a, b, database, trigger: cstring) -> i32 {
+		SQLITE_TRANSACTION :: 22
+		SQLITE_IGNORE :: 2
+		return SQLITE_IGNORE if action == SQLITE_TRANSACTION else 0
+	}
+	for owned in ([2]bool{false, true}) {
+		if owned && !testing.expect_value(t, db.begin_read(database).kind, .None) {
+			return
+		}
+		testing.expect_value(t, sqlite3_set_authorizer(database, ignore_transaction, nil), .OK)
+		err := db.begin(database, "BEGIN")
+		testing.expect_value(t, err.kind, .Execution_Failed)
+		testing.expect_value(t, sqlite3_set_authorizer(database, nil, nil), .OK)
+		testing.expect_value(t, db.sqlite3_get_autocommit(database), i32(0) if owned else i32(1))
+		expect_transaction_mutex(t, database, .BUSY if owned else .OK)
+		if owned {
+			db.rollback_transaction(database)
+			expect_transaction_mutex(t, database, .OK)
+		}
+	}
+}
+
+@(test)
+begin_accepts_single_transaction_starts_and_preserves_nested_ownership :: proc(t: ^testing.T) {
+	database, ready := test_insert_database(t)
+	if !ready {
+		return
+	}
+	defer db.close(database)
+	for sql in ([]cstring{
+		"BEGIN", "begin deferred transaction", ";; /* start */ bEgIn/**/immediate -- line\n TRANSACTION; ;",
+		"BEGIN EXCLUSIVE TRANSACTION 'named transaction'",
+	}) {
+		if !testing.expect_value(t, db.begin(database, sql).kind, .None) {
+			return
+		}
+		testing.expect_value(t, db.sqlite3_get_autocommit(database), i32(0))
+		testing.expect_value(t, db.begin(database, "BEGIN EXCLUSIVE").kind, .Execution_Failed)
+		testing.expect_value(t, db.begin(database, "COMMIT; BEGIN").kind, .Execution_Failed)
+		expect_transaction_mutex(t, database, .BUSY)
+		testing.expect_value(t, db.sqlite3_get_autocommit(database), i32(0))
+		db.rollback_transaction(database)
+		expect_transaction_mutex(t, database, .OK)
+	}
+}
+
 Database_Transaction_Worker :: struct {
 	database:          ^db.SQLite_DB,
 	started, finished: sync.Sema,
