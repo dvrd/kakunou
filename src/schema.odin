@@ -225,6 +225,32 @@ backup_file :: proc(source: ^SQLite_DB, path: string) -> Database_Error {
 		)
 	}
 
+	if os.is_absolute_path(path) {
+		return backup_to_path(source, path)
+	}
+
+	// Resolve the existing parent before creating the file. An absolute path
+	// also makes SQLite treat names such as ":memory:" and "file:..." literally.
+	parent, basename := os.split_path(path)
+	directory, dir_error := os.get_absolute_path(parent, context.allocator)
+	if dir_error != nil {
+		if alloc_error, ok := dir_error.(mem.Allocator_Error); ok {
+			return make_error(.Allocation_Failed, "Could not resolve backup directory", allocator_error = alloc_error)
+		}
+		return make_error(.Open_Failed, "Could not resolve backup directory", subject = path)
+	}
+	defer delete(directory)
+
+	absolute, path_error := os.join_path({directory, basename}, context.allocator)
+	if path_error != nil {
+		return make_error(.Allocation_Failed, "Could not build backup path", allocator_error = path_error)
+	}
+	defer delete(absolute)
+	return backup_to_path(source, absolute)
+}
+
+@(private)
+backup_to_path :: proc(source: ^SQLite_DB, path: string) -> Database_Error {
 	file, open_error := os.open(path, {.Write, .Create, .Excl}, os.perm_number(0o600))
 
 	if open_error != nil {
