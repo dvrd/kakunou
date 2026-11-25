@@ -168,6 +168,26 @@ query_many_finalizes_prepare_bind_step_and_decoder_failure_paths :: proc(t: ^tes
 }
 
 @(test)
+query_many_bind_failure_leaves_write_unexecuted :: proc(t: ^testing.T) {
+	database, ready := test_insert_database(t)
+	if !ready {
+		return
+	}
+	defer testing.expect_value(t, db.sqlite3_close(database), .OK)
+
+	rows, err := db.query_many(
+		database,
+		"INSERT INTO items(id, title) VALUES (?, 'unbound') RETURNING id",
+		nil,
+		test_query_integer,
+	)
+	testing.expect_value(t, err.kind, .Execution_Failed)
+	testing.expect_value(t, err.sqlite_code, .RANGE)
+	testing.expect(t, rows == nil)
+	test_database_count(t, database, "SELECT COUNT(*) FROM items", 0)
+}
+
+@(test)
 single_statement_apis_reject_a_second_statement_before_execution :: proc(t: ^testing.T) {
 	database, ready := test_insert_database(t)
 	if !ready {
@@ -223,9 +243,18 @@ single_statement_apis_reject_a_second_statement_before_execution :: proc(t: ^tes
 	testing.expect_value(t, db.error_message(&hidden), "SQL contains more than one statement")
 	test_database_count(t, database, "SELECT COUNT(*) FROM items", 1)
 
+	for sql in ([]cstring {
+		"INSERT INTO items(id,title) VALUES(5,'no'); /* outer /* inner */ tail */",
+		"INSERT INTO items(id,title) VALUES(6,'vertical');\v",
+	}) {
+		rejected := db.insert(database, sql, nil)
+		testing.expect_value(t, rejected.sqlite_code, .MISUSE)
+	}
+	test_database_count(t, database, "SELECT COUNT(*) FROM items", 1)
+
 	kept := db.insert(
 		database,
-		"INSERT INTO items(id,title) VALUES(1,'kept'); -- done\n/* outer /* inner */ tail */",
+		"INSERT INTO items(id,title) VALUES(1,'kept'); -- done\n/* comment */ /* another */\ufeff \v",
 		nil,
 	)
 	testing.expect_value(t, kept.kind, .None)

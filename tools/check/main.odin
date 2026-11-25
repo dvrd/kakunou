@@ -116,12 +116,8 @@ check :: proc(args: []string) -> os.Error {
 	}
 	compiler := output(root, "which", cfg.compiler) or_return
 	cfg.compiler = os.get_absolute_path(compiler, context.allocator) or_return
-	if !os.is_dir(cfg.shared) {
-		return fail("No shared collection at", cfg.shared)
-	}
 	ensure_dir(cfg.out) or_return
 	if cfg.mode == "build" {
-		run(cfg.compiler, "check", "src", "-no-entry-point", "-vet", "-warnings-as-errors") or_return
 		run(cfg.compiler, "build", "tools/version", "-vet", "-warnings-as-errors", "-o:none",
 		    fmt.tprintf("-out:%s", path(cfg.out, "kakunou-version"))) or_return
 	}

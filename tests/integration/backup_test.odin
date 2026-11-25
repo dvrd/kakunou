@@ -137,11 +137,18 @@ backup_timeout_removes_incomplete_destination_and_keeps_source_transaction :: pr
 		db.insert(database, "INSERT INTO items VALUES(1,'owned')", nil).kind,
 		.None,
 	)
+	for invalid in ([]time.Duration{0, -time.Millisecond}) {
+		testing.expect_value(t, db.backup_file_with_timeout(database, path, invalid).sqlite_code, .MISUSE)
+		testing.expect(t, !os.exists(path))
+	}
+	retry_budget :: 50 * time.Millisecond
 	started := time.tick_now()
-	failure := db.backup_file(database, path)
+	failure := db.backup_file_with_timeout(database, path, retry_budget)
+	elapsed := time.tick_since(started)
 	testing.expect_value(t, failure.kind, .Execution_Failed)
 	testing.expect(t, failure.sqlite_code == .LOCKED || failure.sqlite_code == .BUSY)
-	testing.expect(t, time.tick_since(started) < db.BACKUP_TIMEOUT + 2 * time.Second)
+	testing.expect(t, elapsed >= retry_budget, "retry while the source write transaction is held")
+	testing.expect(t, elapsed < retry_budget + 2 * time.Second, "stop within the retry budget and scheduling tolerance")
 	testing.expect(t, !os.exists(path), "failed backup removes its incomplete destination")
 	testing.expect_value(t, db.sqlite3_get_autocommit(database), 0)
 	test_database_count(t, database, "SELECT COUNT(*) FROM items", 1)

@@ -5,6 +5,7 @@ import "core:bufio"
 import "core:fmt"
 import "core:os"
 import "core:strings"
+import "core:strconv"
 import "core:terminal"
 import "core:sys/posix"
 import "core:time"
@@ -38,6 +39,12 @@ report_tests :: proc(args: []string) -> (code: int, err: os.Error) {
 		return 1, start_err
 	}
 	progress := Progress{live = live, color = live && env("NO_COLOR") == ""}
+	report_path := env("KAKUNOU_MATCHED_SELECTORS")
+	if report_path != "" {
+		progress.selectors = test_selection(args).names
+	}
+	progress.reported_total = -1
+	progress.unknown_queue = env("KAKUNOU_QUEUE_UNKNOWN") == "1"
 	progress.upcoming = env("KAKUNOU_UPCOMING_SUITES")
 	later := env("KAKUNOU_LATER_TESTS")
 	if later != "" {
@@ -83,11 +90,28 @@ report_tests :: proc(args: []string) -> (code: int, err: os.Error) {
 	if wait_err != nil {
 		return 1, wait_err
 	}
+	if report_path != "" && state.success && err == nil {
+		// With state logs disabled, Odin still reports its completed count and emits
+		// one diagnostic per unmatched selector. Each remaining selector runs once.
+		matches: [dynamic]string
+		for name in progress.selectors {
+			if !progress.missing[name] {
+				append(&matches, name)
+			}
+		}
+		if progress.reported_total != len(matches) {
+			clear(&matches)
+		}
+		os.write_entire_file(report_path, strings.join(matches[:], "\n")) or_return
+	}
 	return state.exit_code, err
 }
 
 Progress :: struct {
-	live, color: bool,
+	live, color, unknown_queue: bool,
+	selectors: [dynamic]string,
+	missing: map[string]bool,
+	reported_total: int,
 	visible_rows, finished: int,
 	active: [dynamic]Running_Test,
 	queued: [dynamic]string,
@@ -115,9 +139,11 @@ show_status :: proc(p: ^Progress, snapshot := false) {
 	if (!p.live && !snapshot) || len(p.active) == 0 {
 		return
 	}
-	width, height, ok := terminal.get_terminal_size()
-	if !ok {
-		width, height = 80, 24
+	width, height := 80, 24
+	when #defined(terminal.get_terminal_size) {
+		if w, h, ok := terminal.get_terminal_size(); ok {
+			width, height = w, h
+		}
 	}
 	if snapshot {
 		width, height = max(int), max(int)
@@ -127,6 +153,9 @@ show_status :: proc(p: ^Progress, snapshot := false) {
 		fmt.eprintf("%s%s%s", color, clipped, "\x1b[0m" if color != "" else "")
 	}
 	summary := fmt.tprintf("%d done | %d running | %d queued in suite", p.finished, len(p.active), len(p.queued))
+	if p.unknown_queue {
+		summary = fmt.tprintf("%d done | %d running | queue unknown", p.finished, len(p.active))
+	}
 	row(summary, width, "\x1b[36m" if p.color else "")
 	rows := 1
 	if p.upcoming != "" && height > 3 {
@@ -160,6 +189,24 @@ show_status :: proc(p: ^Progress, snapshot := false) {
 }
 
 report_line :: proc(line: string, p: ^Progress) {
+	if len(p.selectors) > 0 {
+		text := strings.trim_right(line, "\r\n")
+		if strings.has_prefix(text, "No test found for the name: ") {
+			for name in p.selectors {
+				if text == fmt.tprintf("No test found for the name: %q", name) {
+					p.missing[name] = true
+					return
+				}
+			}
+		} else if strings.has_prefix(text, "Finished ") {
+			count, _, rest := strings.partition(strings.trim_prefix(text, "Finished "), " ")
+			if strings.has_prefix(rest, "test in ") || strings.has_prefix(rest, "tests in ") {
+				if n, ok := strconv.parse_int(count); ok {
+					p.reported_total = n
+				}
+			}
+		}
+	}
 	info_prefix :: "[INFO ] --- "
 	message := strings.trim_right(strings.trim_prefix(line, info_prefix), "\r\n")
 	if strings.has_prefix(line, info_prefix) {
@@ -186,11 +233,16 @@ report_line :: proc(line: string, p: ^Progress) {
 				return
 			case "Successful.", "Failed.":
 				clear_status(p)
+				was_running := false
 				for active, i in p.active {
 					if active.name == name {
 						ordered_remove(&p.active, i)
+						was_running = true
 						break
 					}
+				}
+				if !was_running {
+					return
 				}
 				p.finished += 1
 				label := "PASS" if state == "Successful." else "FAIL"

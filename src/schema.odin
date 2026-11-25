@@ -217,6 +217,16 @@ BACKUP_PAGE_BATCH :: 256
 // Never replaces an existing file. Only a successful return denotes a finished
 // backup; readers must not consume a destination while the call is running.
 backup_file :: proc(source: ^SQLite_DB, path: string) -> Database_Error {
+	return backup_file_with_timeout(source, path, BACKUP_TIMEOUT)
+}
+
+// The retry budget applies between SQLite backup steps. A step already in
+// progress may itself take longer than the requested duration.
+backup_file_with_timeout :: proc(source: ^SQLite_DB, path: string, timeout: time.Duration) -> Database_Error {
+	if timeout <= 0 {
+		return make_error(.Execution_Failed, "Backup timeout must be positive", sqlite_code = .MISUSE)
+	}
+
 	if source == nil || path == "" || strings.contains_rune(path, 0) {
 		return make_error(
 			.Execution_Failed,
@@ -225,6 +235,35 @@ backup_file :: proc(source: ^SQLite_DB, path: string) -> Database_Error {
 		)
 	}
 
+	if os.is_absolute_path(path) {
+		return backup_to_path(source, path, timeout)
+	}
+
+	// Resolve the existing parent before creating the file. An absolute path
+	// also makes SQLite treat names such as ":memory:" and "file:..." literally.
+	parent, basename := os.split_path(path)
+	if parent == "" {
+		parent = "."
+	}
+	directory, dir_error := os.get_absolute_path(parent, context.allocator)
+	if dir_error != nil {
+		if alloc_error, ok := dir_error.(mem.Allocator_Error); ok {
+			return make_error(.Allocation_Failed, "Could not resolve backup directory", allocator_error = alloc_error)
+		}
+		return make_error(.Open_Failed, "Could not resolve backup directory", subject = path)
+	}
+	defer delete(directory)
+
+	absolute, path_error := os.join_path({directory, basename}, context.allocator)
+	if path_error != nil {
+		return make_error(.Allocation_Failed, "Could not build backup path", allocator_error = path_error)
+	}
+	defer delete(absolute)
+	return backup_to_path(source, absolute, timeout)
+}
+
+@(private)
+backup_to_path :: proc(source: ^SQLite_DB, path: string, timeout: time.Duration) -> Database_Error {
 	file, open_error := os.open(path, {.Write, .Create, .Excl}, os.perm_number(0o600))
 
 	if open_error != nil {
@@ -257,7 +296,7 @@ backup_file :: proc(source: ^SQLite_DB, path: string) -> Database_Error {
 	release_owned_cstring(name, &error, "Could not free backup path")
 
 	if error.kind == .None {
-		error = backup_copy(source, destination)
+		error = backup_copy_with_timeout(source, destination, timeout)
 	}
 
 	if destination != nil {
@@ -284,6 +323,11 @@ backup_file :: proc(source: ^SQLite_DB, path: string) -> Database_Error {
 }
 
 backup_copy :: proc(source, destination: ^SQLite_DB) -> Database_Error {
+	return backup_copy_with_timeout(source, destination, BACKUP_TIMEOUT)
+}
+
+@(private)
+backup_copy_with_timeout :: proc(source, destination: ^SQLite_DB, timeout: time.Duration) -> Database_Error {
 	backup := sqlite3_backup_init(destination, "main", source, "main")
 
 	if backup == nil {
@@ -297,7 +341,7 @@ backup_copy :: proc(source, destination: ^SQLite_DB) -> Database_Error {
 	result := SQLite_Result.BUSY
 	started := time.tick_now()
 
-	for time.tick_since(started) <= BACKUP_TIMEOUT {
+	for time.tick_since(started) <= timeout {
 		result = sqlite3_backup_step(backup, BACKUP_PAGE_BATCH)
 		if result == .DONE do break
 
