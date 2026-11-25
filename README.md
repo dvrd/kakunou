@@ -55,9 +55,11 @@ Keep the successful begin and its matching commit or rollback on the same thread
 
 ## Publishing and restoring backups
 
-On Linux or macOS, a single backup publisher can maintain a last-known-good snapshot with this sequence:
+Filesystem backup is implemented for Linux, macOS, FreeBSD, OpenBSD, and NetBSD. Choose a destination directory owned by the backup process’s effective user, with group and other write permissions disabled. Its ancestors and filesystem ACLs must prevent untrusted users from replacing the directory or changing its entries. Use a filesystem that supports hard links. On platforms without the POSIX staging primitives, filesystem backups return `.Open_Failed`; the connection-based `backup_copy` remains available. The library copies into a private directory and links the completed mode-0600 snapshot to the requested name. An existing destination causes the backup to fail.
 
-1. Give each attempt a fresh staging filename in the same directory as `latest.sqlite`. Call `backup_file` with the staging path. A killed process can leave a partial file even though the previous published backup is still usable.
+A single publisher can maintain a last-known-good snapshot with this sequence:
+
+1. Give each attempt a fresh staging filename in the same directory as `latest.sqlite`. Call `backup_file` with the staging path. A killed process can leave a private `.kakunou-backup-*` directory. Remove abandoned directories only after confirming their workers have exited.
 2. After `backup_file` succeeds, use `os.rename(staging, published)` to atomically replace `latest.sqlite`. Check the rename result. Reserve the published file for copying and open a separate restored copy for use. Keep the live database and its WAL files at a different path.
 3. To restore, copy `latest.sqlite` to a fresh database path. Open the copy, require `PRAGMA integrity_check` to return `ok`, and verify an application-level invariant before switching traffic. Ignore staging files during restore.
 

@@ -214,8 +214,9 @@ BACKUP_TIMEOUT :: 10 * time.Second
 BACKUP_PAGE_BATCH :: 256
 
 // Uses SQLite's consistent online-backup API, including uncheckpointed WAL.
-// Never replaces an existing file. Only a successful return denotes a finished
-// backup; readers must not consume a destination while the call is running.
+// The destination directory must belong to the caller and exclude group/other
+// writes. Its ancestors and ACLs must prevent untrusted directory replacement.
+// Installs a complete mode-0600 file without replacing an existing destination.
 backup_file :: proc(source: ^SQLite_DB, path: string) -> Database_Error {
 	return backup_file_with_timeout(source, path, BACKUP_TIMEOUT)
 }
@@ -235,31 +236,11 @@ backup_file_with_timeout :: proc(source: ^SQLite_DB, path: string, timeout: time
 		)
 	}
 
-	if os.is_absolute_path(path) {
-		return backup_to_path(source, path, timeout)
+	when #defined(backup_posix_file) {
+		return backup_posix_file(source, path, timeout)
+	} else {
+		return make_error(.Open_Failed, "Private filesystem backup is unsupported on this platform")
 	}
-
-	// Resolve the existing parent before creating the file. An absolute path
-	// also makes SQLite treat names such as ":memory:" and "file:..." literally.
-	parent, basename := os.split_path(path)
-	if parent == "" {
-		parent = "."
-	}
-	directory, dir_error := os.get_absolute_path(parent, context.allocator)
-	if dir_error != nil {
-		if alloc_error, ok := dir_error.(mem.Allocator_Error); ok {
-			return make_error(.Allocation_Failed, "Could not resolve backup directory", allocator_error = alloc_error)
-		}
-		return make_error(.Open_Failed, "Could not resolve backup directory", subject = path)
-	}
-	defer delete(directory)
-
-	absolute, path_error := os.join_path({directory, basename}, context.allocator)
-	if path_error != nil {
-		return make_error(.Allocation_Failed, "Could not build backup path", allocator_error = path_error)
-	}
-	defer delete(absolute)
-	return backup_to_path(source, absolute, timeout)
 }
 
 @(private)
@@ -275,14 +256,12 @@ backup_to_path :: proc(source: ^SQLite_DB, path: string, timeout: time.Duration)
 	}
 
 	if close_error := os.close(file); close_error != nil {
-		backup_remove_incomplete(path)
 		return make_error(.Execution_Failed, "Could not close new backup file", subject = path)
 	}
 
 	name, allocation_error := strings.clone_to_cstring(path)
 
 	if allocation_error != nil {
-		backup_remove_incomplete(path)
 		return make_error(
 			.Allocation_Failed,
 			"Could not copy backup path",
@@ -313,10 +292,6 @@ backup_to_path :: proc(source: ^SQLite_DB, path: string, timeout: time.Duration)
 				error.cleanup_code = close_code
 			}
 		}
-	}
-
-	if error.kind != .None {
-		backup_remove_incomplete(path)
 	}
 
 	return error
