@@ -164,12 +164,12 @@ backup_timeout_removes_incomplete_destination_and_keeps_source_transaction :: pr
 		db.insert(database, "INSERT INTO items VALUES(1,'owned')", nil).kind,
 		.None,
 	)
-	{
+	for destination in ([]string{path, "relative-backup.sqlite"}) {
 		storage: [1]u8
 		limited: mem.Arena
 		mem.arena_init(&limited, storage[:])
 		context.allocator = mem.arena_allocator(&limited)
-		failure := db.backup_file(database, path)
+		failure := db.backup_file(database, destination)
 		testing.expect_value(t, failure.kind, .Allocation_Failed)
 		testing.expect_value(t, failure.allocator_error, .Out_Of_Memory)
 	}
