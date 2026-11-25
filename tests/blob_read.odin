@@ -1,18 +1,22 @@
 package tests
 
-import db "shared:kakunou"
-import "core:testing"
+import "base:runtime"
 import "core:sync"
+import "core:testing"
 import "core:thread"
 import "core:time"
-import "base:runtime"
+import db "shared:kakunou"
 
 @(test)
 database_blob_parameters_and_columns_preserve_binary_data :: proc(t: ^testing.T) {
 	database: ^db.SQLite_DB
 	testing.expect_value(t, db.open(&database, ":memory:").kind, .None)
 	defer db.close(database)
-	testing.expect_value(t, db.execute_sql(database, "CREATE TABLE blobs(value BLOB NOT NULL)").kind, .None)
+	testing.expect_value(
+		t,
+		db.execute_sql(database, "CREATE TABLE blobs(value BLOB NOT NULL)").kind,
+		.None,
+	)
 	data := []u8{0, 255, 1, 0, 42}
 	testing.expect_value(t, db.insert(database, "INSERT INTO blobs VALUES(?)", {data}).kind, .None)
 	found, err := db.query_one(
@@ -62,7 +66,11 @@ database_read_transaction_keeps_connection_locked_until_rollback :: proc(t: ^tes
 		database = database,
 	}
 
-	worker := thread.create_and_start_with_data(&state, database_transaction_worker, runtime.default_context())
+	worker := thread.create_and_start_with_data(
+		&state,
+		database_transaction_worker,
+		runtime.default_context(),
+	)
 
 	if !testing.expect(t, worker != nil) {
 		return

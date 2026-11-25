@@ -1,11 +1,16 @@
 package tests
 
-import db "shared:kakunou"
-import "core:testing"
 import "core:log"
 import "core:strings"
+import "core:testing"
+import db "shared:kakunou"
 
-test_database_count :: proc(t: ^testing.T, database: ^db.SQLite_DB, sql: cstring, expected: i64) -> bool {
+test_database_count :: proc(
+	t: ^testing.T,
+	database: ^db.SQLite_DB,
+	sql: cstring,
+	expected: i64,
+) -> bool {
 	decode :: proc(statement: ^db.SQLite_Statement, count: ^i64) -> db.Database_Error {
 		value, err := db.column_int(statement, 0)
 		if err.kind != .None {

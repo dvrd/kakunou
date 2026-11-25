@@ -1,12 +1,12 @@
 package tests
 
-import db "shared:kakunou"
 import "core:fmt"
 import "core:mem"
 import "core:os"
 import "core:strings"
 import "core:testing"
 import "core:time"
+import db "shared:kakunou"
 
 @(test)
 database_backup_copies_rows_and_preserves_existing_destination :: proc(t: ^testing.T) {
@@ -27,17 +27,29 @@ database_backup_copies_rows_and_preserves_existing_destination :: proc(t: ^testi
 		return
 	}
 	defer testing.expect_value(t, db.sqlite3_close(database), .OK)
-	testing.expect_value(t, db.insert(database, "INSERT INTO items VALUES(1, 'saved')", nil).kind, .None)
+	testing.expect_value(
+		t,
+		db.insert(database, "INSERT INTO items VALUES(1, 'saved')", nil).kind,
+		.None,
+	)
 	testing.expect_value(t, db.backup_file(database, path).kind, .None)
 	copy_database: ^db.SQLite_DB
 
-	if !testing.expect_value(t, db.open(&copy_database, strings.clone_to_cstring(path)).kind, .None) {
+	if !testing.expect_value(
+		t,
+		db.open(&copy_database, strings.clone_to_cstring(path)).kind,
+		.None,
+	) {
 		return
 	}
 
 	defer testing.expect_value(t, db.sqlite3_close(copy_database), .OK)
 	test_database_count(t, copy_database, "SELECT COUNT(*) FROM items", 1)
-	testing.expect_value(t, db.insert(database, "INSERT INTO items VALUES(2, 'new')", nil).kind, .None)
+	testing.expect_value(
+		t,
+		db.insert(database, "INSERT INTO items VALUES(2, 'new')", nil).kind,
+		.None,
+	)
 	testing.expect_value(t, db.backup_file(database, path).kind, .Open_Failed)
 	test_database_count(t, copy_database, "SELECT COUNT(*) FROM items", 1)
 	testing.expect_value(t, db.backup_file(nil, path).sqlite_code, .MISUSE)
@@ -61,7 +73,11 @@ backup_includes_committed_uncheckpointed_wal_rows :: proc(t: ^testing.T) {
 	backup_path := fmt.aprintf("%s/backup.sqlite", directory)
 	database: ^db.SQLite_DB
 
-	if !testing.expect_value(t, db.open(&database, strings.clone_to_cstring(source_path)).kind, .None) {
+	if !testing.expect_value(
+		t,
+		db.open(&database, strings.clone_to_cstring(source_path)).kind,
+		.None,
+	) {
 		return
 	}
 
@@ -71,11 +87,19 @@ backup_includes_committed_uncheckpointed_wal_rows :: proc(t: ^testing.T) {
 		db.execute_sql(database, "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; " + "CREATE TABLE saved(value INTEGER); INSERT INTO saved VALUES(42);").kind,
 		.None,
 	)
-	testing.expect(t, os.exists(fmt.aprintf("%s-wal", source_path)), "source owns an uncheckpointed WAL")
+	testing.expect(
+		t,
+		os.exists(fmt.aprintf("%s-wal", source_path)),
+		"source owns an uncheckpointed WAL",
+	)
 	testing.expect_value(t, db.backup_file(database, backup_path).kind, .None)
 	backup: ^db.SQLite_DB
 
-	if !testing.expect_value(t, db.open(&backup, strings.clone_to_cstring(backup_path)).kind, .None) {
+	if !testing.expect_value(
+		t,
+		db.open(&backup, strings.clone_to_cstring(backup_path)).kind,
+		.None,
+	) {
 		return
 	}
 
@@ -108,7 +132,11 @@ backup_timeout_removes_incomplete_destination_and_keeps_source_transaction :: pr
 	}
 
 	defer db.rollback_transaction(database)
-	testing.expect_value(t, db.insert(database, "INSERT INTO items VALUES(1,'owned')", nil).kind, .None)
+	testing.expect_value(
+		t,
+		db.insert(database, "INSERT INTO items VALUES(1,'owned')", nil).kind,
+		.None,
+	)
 	started := time.tick_now()
 	failure := db.backup_file(database, path)
 	testing.expect_value(t, failure.kind, .Execution_Failed)

@@ -1,6 +1,5 @@
 package tests
 
-import db "shared:kakunou"
 import "base:runtime"
 import "core:fmt"
 import "core:mem"
@@ -10,6 +9,7 @@ import "core:sync"
 import "core:testing"
 import "core:thread"
 import "core:time"
+import db "shared:kakunou"
 
 Database_Transaction_Worker :: struct {
 	database:          ^db.SQLite_DB,
@@ -23,7 +23,11 @@ database_transaction_worker :: proc(data: rawptr) {
 	state.err = db.begin_immediate(state.database)
 
 	if state.err.kind == .None {
-		state.err = db.insert(state.database, "INSERT INTO items(id,title) VALUES(2,'worker');", nil)
+		state.err = db.insert(
+			state.database,
+			"INSERT INTO items(id,title) VALUES(2,'worker');",
+			nil,
+		)
 
 		if state.err.kind == .None {
 			state.err = db.commit_transaction(state.database)
@@ -63,7 +67,11 @@ database_transaction_does_not_block_an_independent_connection :: proc(t: ^testin
 		database = second,
 	}
 
-	worker := thread.create_and_start_with_data(&state, database_transaction_worker, runtime.default_context())
+	worker := thread.create_and_start_with_data(
+		&state,
+		database_transaction_worker,
+		runtime.default_context(),
+	)
 	if !testing.expect(t, worker != nil, "start independent database transaction") {
 		return
 	}
@@ -76,11 +84,19 @@ database_transaction_does_not_block_an_independent_connection :: proc(t: ^testin
 		thread.destroy(worker)
 	}
 
-	if !testing.expect(t, sync.sema_wait_with_timeout(&state.started, 2 * time.Second), "independent worker starts") {
+	if !testing.expect(
+		t,
+		sync.sema_wait_with_timeout(&state.started, 2 * time.Second),
+		"independent worker starts",
+	) {
 		return
 	}
 	completed := sync.sema_wait_with_timeout(&state.finished, time.Second)
-	testing.expect(t, completed, "independent transaction completes while first database remains locked")
+	testing.expect(
+		t,
+		completed,
+		"independent transaction completes while first database remains locked",
+	)
 	db.rollback_transaction(first)
 	outer_open = false
 	thread.join(worker)
@@ -113,7 +129,11 @@ database_connection_stays_locked_until_its_owner_commits_or_rolls_back :: proc(t
 			database = database,
 		}
 
-		worker := thread.create_and_start_with_data(&state, database_transaction_worker, runtime.default_context())
+		worker := thread.create_and_start_with_data(
+			&state,
+			database_transaction_worker,
+			runtime.default_context(),
+		)
 		if !testing.expect(t, worker != nil, "start competing transaction") {
 			return
 		}
@@ -126,7 +146,11 @@ database_connection_stays_locked_until_its_owner_commits_or_rolls_back :: proc(t
 			thread.destroy(worker)
 		}
 
-		if !testing.expect(t, sync.sema_wait_with_timeout(&state.started, 2 * time.Second), "competing worker starts") {
+		if !testing.expect(
+			t,
+			sync.sema_wait_with_timeout(&state.started, 2 * time.Second),
+			"competing worker starts",
+		) {
 			return
 		}
 		testing.expect(
@@ -200,7 +224,11 @@ database_nested_begin_preserves_the_outer_transaction :: proc(t: ^testing.T) {
 		}
 
 		err = db.begin_immediate(database)
-		if !testing.expect(t, err.kind == .None, "connection remains usable after the owner finishes") {
+		if !testing.expect(
+			t,
+			err.kind == .None,
+			"connection remains usable after the owner finishes",
+		) {
 			return
 		}
 		db.rollback_transaction(database)
@@ -211,7 +239,11 @@ database_nested_begin_preserves_the_outer_transaction :: proc(t: ^testing.T) {
 database_helpers_create_tables_and_execute_sql :: proc(t: ^testing.T) {
 	database: ^db.SQLite_DB
 	opened := (db.open(&database, ":memory:").kind == .None)
-	defer testing.expect(t, db.sqlite3_close(database) == .OK, "close database without outstanding statements")
+	defer testing.expect(
+		t,
+		db.sqlite3_close(database) == .OK,
+		"close database without outstanding statements",
+	)
 	if !testing.expect(t, opened, "open in-memory database") {
 		return
 	}
@@ -224,10 +256,18 @@ database_helpers_create_tables_and_execute_sql :: proc(t: ^testing.T) {
 	if !testing.expect(t, (db.create_table(database, schema).kind == .None), "create table") {
 		return
 	}
-	if !testing.expect(t, (db.create_table(database, schema).kind == .None), "idempotent schema initialization") {
+	if !testing.expect(
+		t,
+		(db.create_table(database, schema).kind == .None),
+		"idempotent schema initialization",
+	) {
 		return
 	}
-	if !testing.expect(t, (db.execute_sql(database, "INSERT INTO items (id) VALUES (1), (2);").kind == .None), "execute insert") {
+	if !testing.expect(
+		t,
+		(db.execute_sql(database, "INSERT INTO items (id) VALUES (1), (2);").kind == .None),
+		"execute insert",
+	) {
 		return
 	}
 
@@ -256,14 +296,25 @@ database_helpers_return_errors_without_logging :: proc(t: ^testing.T) {
 	defer context.logger = previous_logger
 
 	err := db.create_table(database, db.Table_Schema{name = "broken"})
-	testing.expect(t, err.kind == .Invalid_Schema, "invalid schema is distinguished from SQLite failure")
+	testing.expect(
+		t,
+		err.kind == .Invalid_Schema,
+		"invalid schema is distinguished from SQLite failure",
+	)
 	testing.expect(t, db.error_subject(&err) == "broken", "table context survives propagation")
 
 	err = db.execute_sql(database, "INSERT INTO missing VALUES (1);")
-	testing.expect(t, err.kind == .Execution_Failed && err.sqlite_code == .ERROR, "original SQLite code is returned")
+	testing.expect(
+		t,
+		err.kind == .Execution_Failed && err.sqlite_code == .ERROR,
+		"original SQLite code is returned",
+	)
 	testing.expect(t, len(db.error_message(&err)) > 0, "SQLite explanation is retained")
 
-	err = db.create_table(nil, db.Table_Schema{name = "items", columns = {{name = "id", data_type = .Integer}}})
+	err = db.create_table(
+		nil,
+		db.Table_Schema{name = "items", columns = {{name = "id", data_type = .Integer}}},
+	)
 	testing.expect(
 		t,
 		err.kind == .Execution_Failed && err.sqlite_code == .MISUSE,
@@ -272,7 +323,11 @@ database_helpers_return_errors_without_logging :: proc(t: ^testing.T) {
 	testing.expect(t, capture.error_count == 0, "helpers do not log while propagating failures")
 
 	db.log_error(err, "Database initialization failed")
-	testing.expect(t, capture.error_count == 1 && capture.matched, "caller logs the complete failure once")
+	testing.expect(
+		t,
+		capture.error_count == 1 && capture.matched,
+		"caller logs the complete failure once",
+	)
 
 	testing.expect(
 		t,
@@ -303,7 +358,11 @@ table_schema_types_and_constraints_are_applied :: proc(t: ^testing.T) {
 		},
 	}
 
-	if !testing.expect(t, (db.create_table(database, schema).kind == .None), "create typed schema") {
+	if !testing.expect(
+		t,
+		(db.create_table(database, schema).kind == .None),
+		"create typed schema",
+	) {
 		return
 	}
 
@@ -320,7 +379,12 @@ table_schema_types_and_constraints_are_applied :: proc(t: ^testing.T) {
 		return
 	}
 
-	if !testing.expect(t, (db.execute_sql(database, "INSERT INTO items (label, note) VALUES ('first', NULL);").kind == .None), "nullable column and generated primary key") {
+	if !testing.expect(
+		t,
+		(db.execute_sql(database, "INSERT INTO items (label, note) VALUES ('first', NULL);").kind ==
+			.None),
+		"nullable column and generated primary key",
+	) {
 		return
 	}
 
@@ -361,17 +425,34 @@ table_schema_quotes_names_and_supports_explicit_creation :: proc(t: ^testing.T) 
 
 	schema := db.Table_Schema {
 		name    = "events\"; DROP TABLE other; --",
-		columns = {{name = "select", data_type = .Integer}, {name = "friend\"s 🎉", data_type = .Text}},
+		columns = {
+			{name = "select", data_type = .Integer},
+			{name = "friend\"s 🎉", data_type = .Text},
+		},
 	}
 
-	if !testing.expect(t, (db.create_table(database, schema, if_not_exists = false).kind == .None), "quoted identifier names are literal") {
+	if !testing.expect(
+		t,
+		(db.create_table(database, schema, if_not_exists = false).kind == .None),
+		"quoted identifier names are literal",
+	) {
 		return
 	}
 
-	if !testing.expect(t, (db.execute_sql(database, `INSERT INTO "events""; DROP TABLE other; --" ("select", "friend""s 🎉") VALUES (1, 'name');`).kind == .None), "quoted columns are usable") {
+	if !testing.expect(
+		t,
+		(db.execute_sql(database, `INSERT INTO "events""; DROP TABLE other; --" ("select", "friend""s 🎉") VALUES (1, 'name');`).kind ==
+			.None),
+		"quoted columns are usable",
+	) {
 		return
 	}
-	if !test_database_count(t, database, `SELECT COUNT(*) FROM "events""; DROP TABLE other; --";`, 1) {
+	if !test_database_count(
+		t,
+		database,
+		`SELECT COUNT(*) FROM "events""; DROP TABLE other; --";`,
+		1,
+	) {
 		return
 	}
 
@@ -390,8 +471,16 @@ table_schema_quotes_names_and_supports_explicit_creation :: proc(t: ^testing.T) 
 		err.kind == .Execution_Failed && err.sqlite_code == .ERROR,
 		"explicit creation returns SQLite failure",
 	)
-	testing.expect(t, db.error_subject(&err) == schema.name, "table context is attached to SQLite error")
-	testing.expect(t, capture.error_count == 0, "duplicate table error is returned without logging")
+	testing.expect(
+		t,
+		db.error_subject(&err) == schema.name,
+		"table context is attached to SQLite error",
+	)
+	testing.expect(
+		t,
+		capture.error_count == 0,
+		"duplicate table error is returned without logging",
+	)
 }
 
 @(test)
@@ -414,7 +503,11 @@ table_schema_rejects_invalid_definitions_and_allocation_failure :: proc(t: ^test
 			{name = "items", columns = {{name = "id", data_type = db.Column_Type(999)}}},
 		}) {
 		sql, err := db.build_new_table_sql(schema)
-		testing.expect(t, err.kind == .Invalid_Schema && sql == nil, "invalid schema produces no SQL")
+		testing.expect(
+			t,
+			err.kind == .Invalid_Schema && sql == nil,
+			"invalid schema produces no SQL",
+		)
 	}
 
 	testing.expect(t, capture.error_count == 0, "invalid schemas are returned without logging")
@@ -429,14 +522,26 @@ table_schema_rejects_invalid_definitions_and_allocation_failure :: proc(t: ^test
 	sql, err := db.build_new_table_sql(db.Table_Schema{name = "items", columns = {{name = "id"}}})
 	context.allocator = previous_allocator
 
-	testing.expect(t, err.kind == .Allocation_Failed && sql == nil, "allocation failure produces no SQL")
-	testing.expect(t, err.allocator_error == .Out_Of_Memory, "underlying allocation error is preserved")
+	testing.expect(
+		t,
+		err.kind == .Allocation_Failed && sql == nil,
+		"allocation failure produces no SQL",
+	)
+	testing.expect(
+		t,
+		err.allocator_error == .Out_Of_Memory,
+		"underlying allocation error is preserved",
+	)
 	testing.expect(t, capture.error_count == 0, "allocation failure is returned without logging")
 }
 
 @(test)
 database_error_is_small_and_truncates_text :: proc(t: ^testing.T) {
-	testing.expect(t, size_of(db.Database_Error) <= 320, "error stays small enough to return by value")
+	testing.expect(
+		t,
+		size_of(db.Database_Error) <= 320,
+		"error stays small enough to return by value",
+	)
 
 	long_text := make([]u8, 2048)
 	defer delete(long_text)
@@ -445,7 +550,12 @@ database_error_is_small_and_truncates_text :: proc(t: ^testing.T) {
 		value = 'x'
 	}
 
-	err := db.make_error(.Execution_Failed, string(long_text), sqlite_code = .ERROR, subject = string(long_text))
+	err := db.make_error(
+		.Execution_Failed,
+		string(long_text),
+		sqlite_code = .ERROR,
+		subject = string(long_text),
+	)
 	testing.expect_value(t, len(db.error_message(&err)), db.ERROR_MESSAGE_CAPACITY - 1)
 	testing.expect_value(t, len(db.error_subject(&err)), db.ERROR_SUBJECT_CAPACITY - 1)
 
@@ -466,7 +576,10 @@ database_changes_counts_rows_updated :: proc(t: ^testing.T) {
 
 	defer db.close(database)
 
-	err := db.execute_sql(database, "INSERT INTO items(id,title) VALUES(1,'one'),(2,'two'),(3,'three');")
+	err := db.execute_sql(
+		database,
+		"INSERT INTO items(id,title) VALUES(1,'one'),(2,'two'),(3,'three');",
+	)
 	if !testing.expect(t, err.kind == .None, "seed rows") {
 		return
 	}
@@ -516,7 +629,10 @@ database_second_connection_waits_for_a_write_lock :: proc(t: ^testing.T) {
 		return
 	}
 	defer db.close(contender)
-	err := db.execute_sql(holder, "CREATE TABLE items(id INTEGER PRIMARY KEY, title TEXT NOT NULL UNIQUE);")
+	err := db.execute_sql(
+		holder,
+		"CREATE TABLE items(id INTEGER PRIMARY KEY, title TEXT NOT NULL UNIQUE);",
+	)
 	if !testing.expect(t, err.kind == .None, "create shared table") {
 		return
 	}
@@ -535,7 +651,11 @@ database_second_connection_waits_for_a_write_lock :: proc(t: ^testing.T) {
 	state := Database_Transaction_Worker {
 		database = contender,
 	}
-	worker := thread.create_and_start_with_data(&state, database_transaction_worker, runtime.default_context())
+	worker := thread.create_and_start_with_data(
+		&state,
+		database_transaction_worker,
+		runtime.default_context(),
+	)
 	if !testing.expect(t, worker != nil, "start second connection") {
 		return
 	}
@@ -546,7 +666,11 @@ database_second_connection_waits_for_a_write_lock :: proc(t: ^testing.T) {
 		}
 		thread.destroy(worker)
 	}
-	if !testing.expect(t, sync.sema_wait_with_timeout(&state.started, 2 * time.Second), "second connection starts") {
+	if !testing.expect(
+		t,
+		sync.sema_wait_with_timeout(&state.started, 2 * time.Second),
+		"second connection starts",
+	) {
 		return
 	}
 	testing.expect(

@@ -1,7 +1,7 @@
 package tests
 
-import db "shared:kakunou"
 import "core:testing"
+import db "shared:kakunou"
 
 @(test)
 library_version_is_a_release_tag :: proc(t: ^testing.T) {

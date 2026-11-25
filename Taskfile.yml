@@ -1,28 +1,14 @@
-# https://taskfile.dev
-# ODIN and WEBTOOLS_SHARED select the compiler and the dependency collection.
-# PACKAGE limits one suite owner (. or a directory under tests/). INTERNAL=1
-# runs only private suites. Flags after -- are odin flags.
-
 version: '3'
 
 vars:
-  ODIN:
-    sh: printf '%s' "${ODIN:-odin}"
-  SHARED:
-    sh: printf '%s' "${WEBTOOLS_SHARED:-$HOME/dev/oss/Odin/shared}"
-  PACKAGE: '{{.PACKAGE | default "all"}}'
-  INTERNAL: '{{.INTERNAL | default "0"}}'
-  CHECK_DIR:
-    sh: |
-      if [ -n "${KAKUNOU_CHECK_DIR:-}" ]; then
-        printf '%s' "${KAKUNOU_CHECK_DIR%/}"
-      else
-        root=${TMPDIR:-/tmp}
-        printf '%s/kakunou-check' "${root%/}"
-      fi
+  RUNNER: '{{.TMPDIR | default "/tmp"}}/kakunou-task-{{(now).UnixNano}}'
 
 env:
-  KAKUNOU_OUT: '{{.CHECK_DIR}}'
+  KAKUNOU_COMPILER: '{{.ODIN | default "odin"}}'
+  KAKUNOU_SHARED: '{{.SHARED | default .WEBTOOLS_SHARED | default ""}}'
+  KAKUNOU_PACKAGE: '{{.PACKAGE | default "all"}}'
+  KAKUNOU_INTERNAL: '{{.INTERNAL | default "0"}}'
+  KAKUNOU_OUT: '{{.CHECK_DIR | default .KAKUNOU_CHECK_DIR | default ""}}'
 
 tasks:
   default:
@@ -33,370 +19,28 @@ tasks:
       - task: test
 
   build:
-    desc: Type-check the library and compile the suite and version tool
+    desc: Type-check and build the library suites and version tool
     cmds:
-      - odin check src -no-entry-point -vet -warnings-as-errors
-      - odin check tools/version -vet -warnings-as-errors
-      - task: version:tool
-      - task: suite
-        vars: {MODE: build}
+      - '"$KAKUNOU_COMPILER" run tools/check -vet -warnings-as-errors -out:"{{.RUNNER}}" -- build {{.CLI_ARGS}}'
 
   test:
-    desc: Run the library suites and the version-tool tests
+    desc: Run the library suites and version-tool tests
     cmds:
-      - task: suite
-        vars: {MODE: test}
-      - task: version:test
+      - '"$KAKUNOU_COMPILER" run tools/check -vet -warnings-as-errors -out:"{{.RUNNER}}" -- test {{.CLI_ARGS}}'
 
   version:
     desc: Print the release tag
     silent: true
     cmds:
-      - printf '%s\n' "$(cat src/VERSION)"
+      - '"$KAKUNOU_COMPILER" run tools/version -out:"{{.RUNNER}}" -- current'
 
   version:next:
     desc: Print the next tag from Conventional Commits since the latest release
     silent: true
     cmds:
-      - task: version:tool
-      - |
-        set -eu
-        tool="$KAKUNOU_OUT/kakunou-version"
-        scratch=$(mktemp -d "${TMPDIR:-/tmp}/kakunou-version.XXXXXX")
-        trap 'rm -rf -- "$scratch"' EXIT
-        git tag --list 'v*' > "$scratch/tags"
-        base=$("$tool" latest "$scratch/tags")
-        [ -n "$base" ] || { printf 'kakunou: no release tag\n' >&2; exit 1; }
-        base_commit=$(git rev-parse --verify "refs/tags/$base^{commit}")
-        git merge-base --is-ancestor "$base_commit" HEAD || {
-            printf 'kakunou: this branch must contain the latest release %s\n' "$base" >&2
-            exit 1
-        }
-        git log -z --format=%B "$base_commit..HEAD" > "$scratch/commits"
-        "$tool" next "$base" "$scratch/commits"
+      - '"$KAKUNOU_COMPILER" run tools/version -out:"{{.RUNNER}}" -- next'
 
   release:
     desc: Check the tree, commit the next release tag, and annotate it
     cmds:
-      - task: version:tool
-      - |
-        set -eu
-        tool="$KAKUNOU_OUT/kakunou-version"
-        version_path=src/VERSION
-        git symbolic-ref --quiet HEAD >/dev/null || { printf 'kakunou: release from a branch\n' >&2; exit 1; }
-        head=$(git rev-parse --verify HEAD)
-        status=$(git status --porcelain --untracked-files=all)
-        [ -z "$status" ] || { printf 'kakunou: commit your changes before releasing\n' >&2; exit 1; }
-        scratch=$(mktemp -d "${TMPDIR:-/tmp}/kakunou-release.XXXXXX")
-        restore=false
-        cleanup() {
-            if [ "$restore" = true ] && [ "$(git rev-parse --verify HEAD)" = "$head" ]; then
-                git restore --worktree --source="$head" -- "$version_path" ||
-                    printf 'kakunou: could not restore %s\n' "$version_path" >&2
-            fi
-            rm -rf -- "$scratch"
-        }
-        trap cleanup EXIT
-        git tag --list 'v*' > "$scratch/tags"
-        base=$("$tool" latest "$scratch/tags")
-        [ -n "$base" ] || { printf 'kakunou: no release tag\n' >&2; exit 1; }
-        base_commit=$(git rev-parse --verify "refs/tags/$base^{commit}")
-        git merge-base --is-ancestor "$base_commit" "$head" || {
-            printf 'kakunou: this branch must contain the latest release %s\n' "$base" >&2
-            exit 1
-        }
-        git log -z --format=%B "$base_commit..$head" > "$scratch/commits"
-        next=$("$tool" next "$base" "$scratch/commits")
-        if [ -z "$next" ]; then
-            printf 'kakunou: no release-worthy commits since %s\n' "$base" >&2
-            exit 0
-        fi
-        current=$(git show "$head:$version_path")
-        if [ "$current" = "$base" ]; then
-            printf '%s' "$next" > "$version_path"
-            restore=true
-            task check
-            status=$(git status --porcelain --untracked-files=all)
-            [ "$status" = " M $version_path" ] || { printf 'kakunou: the checkout changed while verifying the release\n' >&2; exit 1; }
-            [ "$(cat "$version_path")" = "$next" ] || { printf 'kakunou: %s changed during verification\n' "$version_path" >&2; exit 1; }
-            git commit --only -m "chore(release): $next" -- "$version_path"
-            head=$(git rev-parse --verify HEAD)
-            restore=false
-        else
-            [ "$current" = "$next" ] || { printf 'kakunou: %s must match the latest release %s\n' "$version_path" "$base" >&2; exit 1; }
-            task check
-        fi
-        [ "$(git log -1 --format=%s "$head")" = "chore(release): $next" ] &&
-            [ "$(git diff-tree --no-commit-id --name-only -r "$head")" = "$version_path" ] &&
-            [ "$(git show "$head:$version_path")" = "$next" ] || {
-            printf 'kakunou: expected a release commit changing only %s to %s\n' "$version_path" "$next" >&2
-            exit 1
-        }
-        git tag -a "$next" -m "kakunou $next" "$head"
-        printf 'kakunou: tagged %s\n' "$next"
-
-  version:tool:
-    internal: true
-    cmds:
-      - |
-        set -eu
-        out="$KAKUNOU_OUT"
-        mkdir -p "$out"
-        odin build tools/version -vet -warnings-as-errors -o:none -out:"$out/kakunou-version"
-
-  version:test:
-    internal: true
-    cmds:
-      - |
-        set -eu
-        out="$KAKUNOU_OUT"
-        mkdir -p "$out"
-        odin test tools/version -vet -warnings-as-errors -o:none -out:"$out/kakunou-version-tests"
-
-  suite:
-    internal: true
-    silent: true
-    env:
-      KAKUNOU_ROOT: '{{.ROOT_DIR}}'
-      KAKUNOU_MODE: '{{.MODE}}'
-      KAKUNOU_ODIN: '{{.ODIN}}'
-      KAKUNOU_SHARED: '{{.SHARED}}'
-      KAKUNOU_PACKAGE: '{{.PACKAGE}}'
-      KAKUNOU_INTERNAL: '{{.INTERNAL}}'
-    cmds:
-      - |
-        bash <<'END'
-        # Run one library in the src/ layout without modifying the checkout.
-        # src/ provides shared:<name> for this library. Every other shared import
-        # comes from the shared collection.
-        set -euo pipefail
-        root=$KAKUNOU_ROOT
-        mode=${KAKUNOU_MODE:?}
-        compiler=$KAKUNOU_ODIN
-        dependency_source=$KAKUNOU_SHARED
-        selected=${KAKUNOU_PACKAGE:-all}
-        internal_only=false
-        if [[ ${KAKUNOU_INTERNAL:-0} == 1 || ${KAKUNOU_INTERNAL:-0} == true ]]; then
-            internal_only=true
-        fi
-        case "$mode" in
-            build|test) ;;
-            *) printf 'kakunou: suite mode must be build or test\n' >&2; exit 2 ;;
-        esac
-        # Task quotes each argument. The heredoc is quoted, so bash parses these quotes.
-        set -- {{.CLI_ARGS}}
-        while (($#)); do
-            case "$1" in
-                --odin) compiler=$2; shift 2 ;;
-                --shared) dependency_source=$2; shift 2 ;;
-                --package) selected=$2; shift 2 ;;
-                --internal-only) internal_only=true; shift ;;
-                --) shift; break ;;
-                --help|-h)
-                    printf 'Usage: task test [PACKAGE=owner] [INTERNAL=1] [ODIN=path] [SHARED=dir] -- [odin flags]\n'
-                    exit
-                    ;;
-                *) break ;;
-            esac
-        done
-        for argument do
-            case "$argument" in -collection:shared=*) dependency_source=${argument#-collection:shared=} ;; esac
-        done
-        [[ -d "$root/src" ]] || { printf 'No src/ in %s\n' "$root" >&2; exit 2; }
-        [[ -d "$dependency_source" ]] || { printf 'No shared collection at %s\n' "$dependency_source" >&2; exit 2; }
-        dependency_source=$(CDPATH='' cd -- "$dependency_source" && pwd -P)
-        library_root=$root
-        if [[ -e "$root/.git" ]]; then
-            common=$(git -C "$root" rev-parse --git-common-dir)
-            [[ "$common" == /* ]] || common=$root/$common
-            library_root=$(CDPATH='' cd -- "$(dirname -- "$common")" && pwd -P)
-        fi
-        library=$(basename -- "$library_root")
-        compiler=$(command -v "$compiler" || printf '%s' "$compiler")
-        compiler=$(CDPATH='' cd -- "$(dirname -- "$compiler")" && printf '%s/%s' "$PWD" "$(basename -- "$compiler")")
-        work=$(mktemp -d "${TMPDIR:-/tmp}/odin-library-tests.XXXXXX")
-        work=$(CDPATH='' cd -- "$work" && pwd -P)
-        child='' timer=''
-        cleanup() {
-            trap - EXIT
-            for pid in "$child" "$timer"; do
-                [[ -z "$pid" ]] || { kill -TERM -- "-$pid" 2>/dev/null || :; kill -KILL -- "-$pid" 2>/dev/null || :; wait "$pid" 2>/dev/null || :; }
-            done
-            rm -rf -- "$work"
-        }
-        trap cleanup EXIT
-        trap 'exit 130' INT
-        trap 'exit 143' HUP TERM
-
-        : > "$work/suites"
-        while IFS= read -r directory; do
-            relative=${directory#"$root"/}
-            private=false
-            case "$relative" in
-                tests/internal) owner=.; private=true ;;
-                tests/*/internal) owner=${relative#tests/}; owner=${owner%/internal}; private=true ;;
-                tests) owner=. ;;
-                tests/*) owner=${relative#tests/} ;;
-                *) continue ;;
-            esac
-            [[ "$selected" == all || "$selected" == "$owner" ]] || continue
-            [[ "$internal_only" == false || "$private" == true ]] || continue
-            printf '%s\t%s\n' "$relative" "$private" >> "$work/suites"
-        done < <(find "$root/tests" -type d \( -name .git -o -name __pycache__ \) -prune -o -type f -name '*_test.odin' -exec dirname {} \; | sort -u)
-        [[ -s "$work/suites" ]] || { printf 'No matching test suites\n' >&2; exit 2; }
-
-        copy_tree() {
-            local source=$1 target=$2
-            mkdir -p "$target"
-            if [[ -e "$source/.git" ]]; then
-                while IFS= read -r -d '' path; do
-                    [[ ! -f "$source/$path" ]] || printf '%s\0' "$path"
-                done < <(git -C "$source" ls-files --cached --others --exclude-standard -z) > "$work/files"
-            else
-                (cd "$source" && find . -type d \( -name .git -o -name __pycache__ -o -name '.*' ! -name . \) -prune -o -type f ! -name '.*' -print0) > "$work/files"
-            fi
-            (cd "$source" && tar --null -T "$work/files" -cf -) | (cd "$target" && tar -xf -)
-        }
-
-        repository=$work/repository
-        copy_tree "$root" "$repository"
-        shared=$work/shared
-        mkdir -p "$shared"
-        ln -s "$repository/src" "$shared/$library"
-
-        imports_of() {
-            { grep -rhoE '"shared:[A-Za-z0-9_]+' --include='*.odin' "$@" 2>/dev/null || :; } | sed 's/^"shared://' | sort -u
-        }
-
-        normalize() {
-            local IFS=/ part
-            local -a out=()
-            set -f
-            for part in $1; do
-                case "$part" in
-                    ''|.) ;;
-                    ..) ((${#out[@]} == 0)) || unset 'out[${#out[@]}-1]' ;;
-                    *) out+=("$part") ;;
-                esac
-            done
-            set +f
-            printf '/%s' "${out[@]}"
-            printf '\n'
-        }
-
-        escaping_imports() {
-            local tree=$1 scan=${2:-$1} location file path resolved
-            while IFS= read -r location; do
-                file=${location%%:*}
-                path=${location#*\"}
-                path=${path%\"}
-                resolved=$(normalize "$(dirname -- "$file")/$path")
-                [[ "$resolved" == "$tree" || "$resolved" == "$tree"/* ]] || printf '%s\t%s\n' "$file" "$resolved"
-            done < <(grep -roE --include='*.odin' -H 'import( +[A-Za-z0-9_]+)? +"\.\.?/[^"]*"' "$scan" 2>/dev/null || :)
-        }
-
-        escapes=$(escaping_imports "$repository/src"; escaping_imports "$repository" "$repository/tests")
-        if [[ -n "$escapes" ]]; then
-            printf 'Relative imports leave the repository; use shared:<library> instead:\n%s\n' "${escapes//$repository\//}" >&2
-            exit 2
-        fi
-        pending=$(imports_of "$repository/src" "$repository/tests")
-        seen=" $library "
-        while [[ -n "$pending" ]]; do
-            next=''
-            for name in $pending; do
-                [[ "$seen" != *" $name "* ]] || continue
-                seen="$seen$name "
-                [[ -d "$dependency_source/$name" ]] || { printf 'Missing dependency shared:%s in %s\n' "$name" "$dependency_source" >&2; exit 2; }
-                copy_tree "$dependency_source/$name" "$shared/$name"
-                next="$next $(imports_of "$shared/$name")"
-                while IFS=$'\t' read -r _ resolved; do
-                    [[ "$resolved" == "$shared"/* ]] || { printf 'shared:%s imports outside the collection: %s\n' "$name" "$resolved" >&2; exit 2; }
-                    resolved=${resolved#"$shared"/}
-                    next="$next ${resolved%%/*}"
-                done < <(escaping_imports "$shared/$name")
-            done
-            pending=$next
-        done
-        printf 'Library %s from %s/src; dependencies from %s:%s\n' "$library" "$root" "$dependency_source" "${seen# $library}"
-
-        while IFS= read -r directory; do
-            package=${directory#"$repository"/tests}
-            package=${package%internal}
-            package=${package#/}
-            package=${package%/}
-            target=$repository/src${package:+/$package}
-            [[ -d "$target" ]] || { printf 'Private tests %s have no package %s\n' "${directory#"$repository"/}" "src/$package" >&2; exit 2; }
-            for file in "$directory"/*.odin; do
-                [[ ! -f "$file" ]] || cp "$file" "$target/"
-            done
-        done < <(find "$repository/tests" -type d \( -path "$repository/tests/internal" -o -path "$repository/tests/*/internal" \) | sort)
-
-        sdk=$("$compiler" root)
-        for collection in base core vendor; do
-            ln -s "$sdk/$collection" "$work/$collection"
-        done
-        {
-            printf '#!/usr/bin/env bash\nset -euo pipefail\ncompiler=%q\nstaged_root=%q\n' "$compiler" "$work"
-            cat <<'WRAPPER'
-        if [[ "$*" == root && $# == 1 ]]; then printf '%s\n' "$staged_root"; exit; fi
-        args=()
-        for argument do
-            case "$argument" in -collection:shared=*) ;; *) args+=("$argument") ;; esac
-        done
-        if [[ "${args[0]:-}" != version ]]; then args+=("-collection:shared=$staged_root/shared"); fi
-        exec "$compiler" "${args[@]}"
-        WRAPPER
-        } > "$work/odin"
-        chmod +x "$work/odin"
-        export ODIN=$work/odin
-        if [[ "$mode" == build ]]; then
-            artifact="$KAKUNOU_OUT"
-            mkdir -p "$artifact"
-            output="$artifact/kakunou-tests"
-        else
-            output="$work/tests"
-        fi
-        flags=("-collection:shared=$shared" "-vet" "-warnings-as-errors")
-        has_output=false
-        for argument do
-            case "$argument" in
-                -collection:shared=*) ;;
-                -out:*) has_output=true; flags+=("$argument"); output=${argument#-out:} ;;
-                *) flags+=("$argument") ;;
-            esac
-        done
-        [[ "$has_output" == true ]] || flags+=("-out:$output")
-
-        set -m
-        cd "$repository"
-        while IFS=$'\t' read -r relative private; do
-            target=$repository/$relative
-            if [[ "$private" == true ]]; then
-                package=${relative#tests}
-                package=${package%internal}
-                package=${package#/}
-                package=${package%/}
-                target=$repository/src${package:+/$package}
-            fi
-            if [[ "$mode" == build ]]; then
-                printf 'Building %s\n' "$relative"
-                command=(build "$target" -build-mode:test)
-            else
-                printf 'Testing %s\n' "$relative"
-                command=(test "$target")
-            fi
-            "$compiler" "${command[@]}" "${flags[@]}" </dev/null & child=$!
-            (sleep 300; printf 'Suite timeout: %s\n' "$relative" >&2; kill -TERM -- "-$child" 2>/dev/null || :; sleep 5; kill -KILL -- "-$child" 2>/dev/null || :) & timer=$!
-            status=0
-            wait "$child" || status=$?
-            child=''
-            kill -TERM -- "-$timer" 2>/dev/null || :
-            wait "$timer" 2>/dev/null || :
-            timer=''
-            [[ "$status" == 0 ]] || exit "$status"
-        done < "$work/suites"
-        if [[ "$mode" == build ]]; then
-            printf 'kakunou: build complete (%s)\n' "$output"
-        fi
-        END
+      - '"$KAKUNOU_COMPILER" run tools/version -out:"{{.RUNNER}}" -- release'

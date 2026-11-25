@@ -1,9 +1,9 @@
 package tests
 
-import db "shared:kakunou"
 import "core:encoding/json"
 import "core:mem"
 import "core:testing"
+import db "shared:kakunou"
 
 test_query_integer :: proc(statement: ^db.SQLite_Statement, output: ^i64) -> db.Database_Error {
 	value, error := db.column_int(statement, 0)
@@ -41,7 +41,13 @@ query_many_rejects_invalid_inputs_before_allocating_or_entering_sqlite :: proc(t
 			{database, "SELECT 1", test_query_integer, db.QUERY_ROWS_LIMIT + 1},
 			{database, "SELECT 1", test_query_integer, max(int)},
 		}) {
-		rows, error := db.query_many(arguments.database, arguments.sql, nil, arguments.decode, arguments.limit)
+		rows, error := db.query_many(
+			arguments.database,
+			arguments.sql,
+			nil,
+			arguments.decode,
+			arguments.limit,
+		)
 		testing.expect_value(t, error.kind, .Execution_Failed)
 		testing.expect_value(t, error.sqlite_code, .MISUSE)
 		testing.expect(t, rows == nil)
@@ -94,7 +100,9 @@ query_many_bounds_initial_capacity_by_the_requested_limit :: proc(t: ^testing.T)
 }
 
 @(test)
-query_many_accepts_exact_limits_and_rejects_excess_rows_without_partial_rows :: proc(t: ^testing.T) {
+query_many_accepts_exact_limits_and_rejects_excess_rows_without_partial_rows :: proc(
+	t: ^testing.T,
+) {
 	arena: mem.Dynamic_Arena
 	mem.dynamic_arena_init(&arena)
 	defer mem.dynamic_arena_destroy(&arena)
@@ -184,12 +192,22 @@ single_statement_apis_reject_a_second_statement_before_execution :: proc(t: ^tes
 	testing.expect_value(t, db.error_message(&query_error), "SQL contains more than one statement")
 
 	value: i64
-	found, one_error := db.query_one(database, "SELECT 1; /* leftover */ SELECT 2", nil, &value, test_query_integer)
+	found, one_error := db.query_one(
+		database,
+		"SELECT 1; /* leftover */ SELECT 2",
+		nil,
+		&value,
+		test_query_integer,
+	)
 	testing.expect(t, !found)
 	testing.expect_value(t, one_error.sqlite_code, .MISUSE)
 	testing.expect_value(t, value, 0)
 
-	unclosed := db.insert(database, "INSERT INTO items(id,title) VALUES(4,'no'); /* unfinished", nil)
+	unclosed := db.insert(
+		database,
+		"INSERT INTO items(id,title) VALUES(4,'no'); /* unfinished",
+		nil,
+	)
 	testing.expect_value(t, unclosed.sqlite_code, .MISUSE)
 	testing.expect_value(t, db.error_message(&unclosed), "SQL contains more than one statement")
 
@@ -244,7 +262,13 @@ single_statement_apis_ignore_semicolon_only_tails :: proc(t: ^testing.T) {
 			"INSERT INTO items(id,title) VALUES(6,'f');;;",
 		}) {
 		inserted := db.insert(database, sql, nil)
-		testing.expectf(t, inserted.kind == .None, "empty tail %d: %s", index, db.error_message(&inserted))
+		testing.expectf(
+			t,
+			inserted.kind == .None,
+			"empty tail %d: %s",
+			index,
+			db.error_message(&inserted),
+		)
 	}
 
 	hidden := db.insert(
@@ -254,13 +278,23 @@ single_statement_apis_ignore_semicolon_only_tails :: proc(t: ^testing.T) {
 	)
 	testing.expect_value(t, hidden.sqlite_code, .MISUSE)
 	testing.expect_value(t, db.error_message(&hidden), "SQL contains more than one statement")
-	unclosed := db.insert(database, "INSERT INTO items(id,title) VALUES(9,'no');; /* unfinished", nil)
+	unclosed := db.insert(
+		database,
+		"INSERT INTO items(id,title) VALUES(9,'no');; /* unfinished",
+		nil,
+	)
 	testing.expect_value(t, unclosed.sqlite_code, .MISUSE)
 	testing.expect_value(t, db.error_message(&unclosed), "SQL contains more than one statement")
 	test_database_count(t, database, "SELECT COUNT(*) FROM items", 6)
 
 	value: i64
-	found, error := db.query_one(database, "SELECT COUNT(*) FROM items;;", nil, &value, test_query_integer)
+	found, error := db.query_one(
+		database,
+		"SELECT COUNT(*) FROM items;;",
+		nil,
+		&value,
+		test_query_integer,
+	)
 	testing.expect(t, found)
 	testing.expect_value(t, error.kind, .None)
 	testing.expect_value(t, value, 6)
@@ -282,13 +316,21 @@ insert_rejects_a_returning_statement_before_it_writes :: proc(t: ^testing.T) {
 	}
 	defer testing.expect_value(t, db.sqlite3_close(database), .OK)
 
-	error := db.insert(database, "INSERT INTO items(id,title) VALUES(1,'returned') RETURNING id", nil)
+	error := db.insert(
+		database,
+		"INSERT INTO items(id,title) VALUES(1,'returned') RETURNING id",
+		nil,
+	)
 	testing.expect_value(t, error.kind, .Execution_Failed)
 	testing.expect_value(t, error.sqlite_code, .MISUSE)
 	testing.expect_value(t, error.cleanup_code, .OK)
 	testing.expect_value(t, db.error_message(&error), "Insert must not return rows")
 	test_database_count(t, database, "SELECT COUNT(*) FROM items", 0)
-	testing.expect_value(t, db.insert(database, "INSERT INTO items(id,title) VALUES(1,'kept')", nil).kind, .None)
+	testing.expect_value(
+		t,
+		db.insert(database, "INSERT INTO items(id,title) VALUES(1,'kept')", nil).kind,
+		.None,
+	)
 	test_database_count(t, database, "SELECT COUNT(*) FROM items", 1)
 }
 
@@ -309,7 +351,12 @@ query_many_retains_finalize_error_alongside_the_primary_decoder_failure :: proc(
 		return db.make_error(.Execution_Failed, "Decoder failure", sqlite_code = .MISMATCH)
 	}
 
-	rows, error := db.query_many(database, "SELECT 1 UNION ALL SELECT abs(-9223372036854775808)", nil, decode_failure)
+	rows, error := db.query_many(
+		database,
+		"SELECT 1 UNION ALL SELECT abs(-9223372036854775808)",
+		nil,
+		decode_failure,
+	)
 	testing.expect(t, rows == nil)
 	testing.expect_value(t, error.sqlite_code, .MISMATCH)
 	testing.expect_value(t, error.cleanup_code, .ERROR)
@@ -329,7 +376,9 @@ query_many_propagates_initial_and_growth_allocation_failures :: proc(t: ^testing
 		arena: mem.Arena
 		mem.arena_init(&arena, storage[:limit])
 		context.temp_allocator = mem.arena_allocator(&arena)
-		query :: "WITH RECURSIVE r(n) AS (VALUES(1) UNION ALL " + "SELECT n+1 FROM r WHERE n<9) SELECT n FROM r"
+		query ::
+			"WITH RECURSIVE r(n) AS (VALUES(1) UNION ALL " +
+			"SELECT n+1 FROM r WHERE n<9) SELECT n FROM r"
 		rows, error := db.query_many(database, query, nil, test_query_integer, 9)
 		testing.expect_value(t, error.kind, .Allocation_Failed)
 		testing.expect_value(t, error.allocator_error, .Out_Of_Memory)
@@ -439,7 +488,15 @@ test_schema_free_failure :: proc(
 	mem.Allocator_Error,
 ) {
 	parent := cast(^mem.Allocator)data
-	result, error := parent.procedure(parent.data, mode, size, alignment, old_memory, old_size, location)
+	result, error := parent.procedure(
+		parent.data,
+		mode,
+		size,
+		alignment,
+		old_memory,
+		old_size,
+		location,
+	)
 	if mode == .Free && error == nil {
 		error = .Invalid_Pointer
 	}

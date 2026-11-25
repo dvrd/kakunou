@@ -1,10 +1,12 @@
 package tests
 
-import db "shared:kakunou"
 import "core:testing"
+import db "shared:kakunou"
 
 @(test)
-rollback_after_sqlite_automatic_abort_consumes_ownership_without_second_rollback :: proc(t: ^testing.T) {
+rollback_after_sqlite_automatic_abort_consumes_ownership_without_second_rollback :: proc(
+	t: ^testing.T,
+) {
 	automatic_rollback_case(t, false)
 }
 
@@ -37,7 +39,11 @@ automatic_rollback_case :: proc(t: ^testing.T, commit: bool) {
 		db.rollback_transaction(database)
 	}
 
-	testing.expect_value(t, db.insert(database, "INSERT INTO items VALUES(1,'first')", nil).kind, .None)
+	testing.expect_value(
+		t,
+		db.insert(database, "INSERT INTO items VALUES(1,'first')", nil).kind,
+		.None,
+	)
 	error := db.insert(database, "INSERT OR ROLLBACK INTO items VALUES(1,'duplicate')", nil)
 	testing.expect_value(t, error.sqlite_code, .CONSTRAINT)
 	testing.expect_value(t, db.sqlite3_get_autocommit(database), i32(1))

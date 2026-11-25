@@ -12,6 +12,18 @@ main :: proc() {
 }
 
 run :: proc(args: []string) -> bool {
+	if len(args) == 1 {
+		switch args[0] {
+		case "current":
+			source := read_file(VERSION_PATH) or_return
+			tag, _ := version_literal(source) or_return
+			fmt.println(tag)
+			return true
+		case "next", "release":
+			return repository_version(args[0] == "release")
+		}
+	}
+
 	if len(args) == 2 && args[0] == "latest" {
 		tags := read_file(args[1]) or_return
 		if latest, ok := highest_tag(strings.split_lines(tags)); ok {
@@ -22,30 +34,34 @@ run :: proc(args: []string) -> bool {
 	}
 
 	if len(args) != 3 || args[0] != "next" {
-		fmt.fprintln(os.stderr, "usage: version latest <tag-list> or version next <base-tag> <git-log>")
-		return false
-	}
-
-	base, valid := parse_tag(args[1])
-	if !valid {
-		fmt.fprintln(os.stderr, args[1], "must be a vMAJOR.MINOR.PATCH tag")
+		fmt.fprintln(os.stderr, "usage: kakunou-version current | next [<base-tag> <git-log>] | latest <tag-list> | release")
 		return false
 	}
 
 	messages := read_file(args[2]) or_return
+	next := next_tag(args[1], messages) or_return
+	if next != "" {
+		fmt.println(next)
+	}
+	return true
+}
+
+next_tag :: proc(tag, messages: string) -> (string, bool) {
+	base, valid := parse_tag(tag)
+	if !valid {
+		fmt.fprintln(os.stderr, tag, "must be a vMAJOR.MINOR.PATCH tag")
+		return "", false
+	}
 	impact := release_impact(messages)
 	if impact == .None {
-		return true
+		return "", true
 	}
-
 	next, ok := version_bump(base, release_bump(base, impact))
 	if !ok {
-		fmt.fprintln(os.stderr, "cannot increment", args[1])
-		return false
+		fmt.fprintln(os.stderr, "cannot increment", tag)
+		return "", false
 	}
-
-	fmt.printf("v%d.%d.%d\n", next.major, next.minor, next.patch)
-	return true
+	return fmt.tprintf("v%d.%d.%d", next.major, next.minor, next.patch), true
 }
 
 read_file :: proc(path: string) -> (content: string, ok: bool) {
