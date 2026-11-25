@@ -1,5 +1,6 @@
 package version_tool
 
+import "../private_temp"
 import "core:fmt"
 import "core:os"
 import "core:odin/tokenizer"
@@ -134,7 +135,7 @@ checkout_matches :: proc(branch, head: string) -> bool {
 
 release :: proc(branch, head, base, next: string) -> bool {
 	root := command_output("git", "rev-parse", "--show-toplevel") or_return
-	stage, err := os.make_directory_temp("", "kakunou-release-*", context.allocator)
+	stage, err := private_temp.create("kakunou-release")
 	if err != nil {
 		fmt.eprintln("kakunou: cannot create release worktree directory", err)
 		return false

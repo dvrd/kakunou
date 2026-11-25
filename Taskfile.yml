@@ -1,8 +1,5 @@
 version: '3'
 
-vars:
-  RUNNER: '{{.TMPDIR | default "/tmp"}}/kakunou-task-{{(now).UnixNano}}'
-
 env:
   KAKUNOU_COMPILER: '{{.ODIN | default "odin"}}'
   KAKUNOU_SHARED: '{{.SHARED | default .WEBTOOLS_SHARED | default ""}}'
@@ -21,27 +18,27 @@ tasks:
   build:
     desc: Type-check and build the library suites and version tool
     cmds:
-      - '"$KAKUNOU_COMPILER" run tools/check -vet -warnings-as-errors -out:"{{.RUNNER}}" -- build {{.CLI_ARGS}}'
+      - 'sh tools/run-odin.sh tools/check -vet -warnings-as-errors -- build {{.CLI_ARGS}}'
 
   test:
     silent: true
     desc: Run unit and integration tests
     cmds:
-      - '"$KAKUNOU_COMPILER" run tools/check -vet -warnings-as-errors -out:"{{.RUNNER}}" -- test {{.CLI_ARGS}}'
+      - 'sh tools/run-odin.sh tools/check -vet -warnings-as-errors -- test {{.CLI_ARGS}}'
 
   version:
     desc: Print the release tag
     silent: true
     cmds:
-      - '"$KAKUNOU_COMPILER" run tools/version -out:"{{.RUNNER}}" -- current'
+      - 'sh tools/run-odin.sh tools/version -- current'
 
   version:next:
     desc: Print the next tag from Conventional Commits since the latest release
     silent: true
     cmds:
-      - '"$KAKUNOU_COMPILER" run tools/version -out:"{{.RUNNER}}" -- next'
+      - 'sh tools/run-odin.sh tools/version -- next'
 
   release:
     desc: Check the tree, commit the next release tag, and annotate it
     cmds:
-      - '"$KAKUNOU_COMPILER" run tools/version -out:"{{.RUNNER}}" -- release'
+      - 'sh tools/run-odin.sh tools/version -- release'

@@ -160,7 +160,15 @@ tasks:
 		}
 		return os.exists(path)
 	}
-	ready := wait_for_file(fmt.tprintf("%s.ready", mode))
+	ready_path := fmt.tprintf("%s.ready", mode)
+	ready := wait_for_file(ready_path)
+	if ready {
+		stage, read_err := os.read_entire_file(ready_path, context.allocator)
+		testing.expect_value(t, read_err, nil)
+		info, stat_err := os.stat(strings.trim_space(string(stage)), context.allocator)
+		testing.expect_value(t, stat_err, nil)
+		testing.expect_value(t, info.mode & os.Permissions_All, os.Permissions{.Read_User, .Write_User, .Execute_User})
+	}
 	kill_err := os.process_kill(child)
 	_, wait_err := os.process_wait(child)
 	os.remove(block)
