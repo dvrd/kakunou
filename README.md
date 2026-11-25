@@ -15,3 +15,49 @@ task version
 ```
 
 The runner maps `shared:kakunou` to this checkout’s `src/` directory. The current library and tests need no external shared collection. For additional `shared:` imports, set `SHARED=/path/to/collection` on the task or set `WEBTOOLS_SHARED` in the environment. Use `ODIN=/path/to/odin` to select a compiler.
+
+## Writes with RETURNING
+
+A `query_many` error describes the result of reading rows. In autocommit mode, SQLite can apply the write before the decoder, allocator, or row-limit check fails. For example, inserting two rows with `RETURNING id` and `max_rows = 1` can return `.TOOBIG` with both rows already inserted. Retrying that insert can duplicate the write.
+
+Wrap the write and readback in one transaction when both must succeed. This example assumes an open connection and an `items(id INTEGER PRIMARY KEY, title TEXT)` table.
+
+```odin
+import db "shared:kakunou"
+
+insert_pair :: proc(database: ^db.SQLite_DB, limit: int) -> db.Database_Error {
+    decode_id :: proc(statement: ^db.SQLite_Statement, id: ^i64) -> db.Database_Error {
+        value, err := db.column_int(statement, 0)
+        if err.kind == .None {
+            id^ = value
+        }
+        return err
+    }
+
+    err := db.begin_immediate(database)
+    if err.kind != .None {
+        return err
+    }
+
+    _, err = db.query_many(database,
+        "INSERT INTO items(id, title) VALUES (1, 'first'), (2, 'second') RETURNING id",
+        nil, decode_id, limit)
+    if err.kind != .None {
+        db.rollback_transaction(database)
+        return err
+    }
+    return db.commit_transaction(database)
+}
+```
+
+Keep the successful begin and its matching commit or rollback on the same thread. Each consumes the transaction exactly once. A failed commit handles rollback internally and releases the connection mutex. With a fresh table, the example rolls back both rows for a limit of one and commits both for a limit of two. Returned rows borrow the caller’s temporary allocator. [Transaction regression](tests/integration/query_many_test.odin)
+
+## Publishing and restoring backups
+
+On Linux or macOS, a single backup publisher can maintain a last-known-good snapshot with this sequence:
+
+1. Give each attempt a fresh staging filename in the same directory as `latest.sqlite`. Call `backup_file` with the staging path. A killed process can leave a partial file even though the previous published backup is still usable.
+2. After `backup_file` succeeds, use `os.rename(staging, published)` to atomically replace `latest.sqlite`. Check the rename result. Reserve the published file for copying and open a separate restored copy for use. Keep the live database and its WAL files at a different path.
+3. To restore, copy `latest.sqlite` to a fresh database path. Open the copy, require `PRAGMA integrity_check` to return `ok`, and verify an application-level invariant before switching traffic. Ignore staging files during restore.
+
+The recovery test kills a backup worker while a separate connection holds a write transaction, then opens a restored copy and checks its integrity, row count, and sum of IDs. Repeat the drill with your production database size, journal mode, and write rate. This drill covers process termination. Power-loss durability also depends on filesystem and storage flush guarantees. [Recovery rehearsal](tests/integration/backup_recovery_test.odin)
