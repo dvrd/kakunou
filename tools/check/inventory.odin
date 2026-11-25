@@ -1,6 +1,5 @@
 package main
 
-import "core:encoding/json"
 import "core:fmt"
 import "core:odin/ast"
 import "core:odin/parser"
@@ -8,12 +7,9 @@ import "core:os"
 import "core:slice"
 import "core:strings"
 
-JSON_REPORT_PREFIX :: "-define:ODIN_TEST_JSON_REPORT="
-
 Test_Selection :: struct {
 	names:   [dynamic]string,
 	matched: map[string]bool,
-	report:  string,
 }
 
 test_selection :: proc(flags: []string) -> (selection: Test_Selection) {
@@ -23,8 +19,6 @@ test_selection :: proc(flags: []string) -> (selection: Test_Selection) {
 			for selector in strings.split_iterator(&names, ",") {
 				append(&selection.names, selector)
 			}
-		} else if strings.has_prefix(flag, JSON_REPORT_PREFIX) {
-			selection.report = strings.trim_prefix(flag, JSON_REPORT_PREFIX)
 		}
 	}
 	return
@@ -32,14 +26,10 @@ test_selection :: proc(flags: []string) -> (selection: Test_Selection) {
 
 record_matches :: proc(selection: ^Test_Selection, report_path: string) -> os.Error {
 	data := os.read_entire_file(report_path, context.allocator) or_return
-	report: struct { packages: map[string][]struct { name: string } }
-	if err := json.unmarshal(data, &report); err != nil {
-		return fail("could not read the test runner's JSON results", report_path)
-	}
-	for pkg, tests in report.packages {
-		for test in tests {
-			selection.matched[test.name] = true
-			selection.matched[fmt.tprintf("%s.%s", pkg, test.name)] = true
+	names := string(data)
+	for name in strings.split_iterator(&names, "\n") {
+		if name != "" {
+			selection.matched[name] = true
 		}
 	}
 	return nil
