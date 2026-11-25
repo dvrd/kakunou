@@ -296,6 +296,8 @@ QUERY_ROWS_LIMIT :: 100000
 
 // Rows and decoded fields borrow the caller's temporary allocator. An error
 // returns no usable rows; the caller owns that allocator and logging.
+// A write with RETURNING may already have taken effect when decoding or the
+// row limit fails. Use an explicit transaction to roll back on those errors.
 query_many :: proc(
 	database: ^SQLite_DB,
 	sql: cstring,

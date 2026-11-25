@@ -558,3 +558,38 @@ schema_creation_retains_cleanup_errors_before_returning :: proc(t: ^testing.T) {
 	testing.expect_value(t, error.sqlite_code, .ERROR)
 	testing.expect_value(t, error.allocator_error, .Invalid_Pointer)
 }
+
+@(test)
+returning_write_row_limit_respects_the_callers_transaction :: proc(t: ^testing.T) {
+	database, ready := test_insert_database(t)
+	if !ready {
+		return
+	}
+	defer testing.expect_value(t, db.sqlite3_close(database), .OK)
+
+	sql :: "INSERT INTO items(id, title) VALUES (1, 'first'), (2, 'second') RETURNING id"
+	insert_pair :: proc(database: ^db.SQLite_DB, limit: int) -> db.Database_Error {
+		err := db.begin_immediate(database)
+		if err.kind != .None do return err
+		_, err = db.query_many(database, sql, nil, test_query_integer, limit)
+		if err.kind != .None {
+			db.rollback_transaction(database)
+			return err
+		}
+		return db.commit_transaction(database)
+	}
+
+	// The same failed readback has two different outcomes for the write.
+	rows, err := db.query_many(database, sql, nil, test_query_integer, 1)
+	testing.expect_value(t, err.sqlite_code, .TOOBIG)
+	testing.expect(t, rows == nil)
+	test_database_count(t, database, "SELECT COUNT(*) FROM items", 2)
+	if !testing.expect_value(t, db.execute_sql(database, "DELETE FROM items").kind, .None) {
+		return
+	}
+
+	testing.expect_value(t, insert_pair(database, 1).sqlite_code, .TOOBIG)
+	test_database_count(t, database, "SELECT COUNT(*) FROM items", 0)
+	testing.expect_value(t, insert_pair(database, 2).kind, .None)
+	test_database_count(t, database, "SELECT COUNT(*) FROM items", 2)
+}

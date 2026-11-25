@@ -6,6 +6,7 @@ import "core:os"
 import "core:strings"
 import "core:testing"
 import "core:time"
+import "../../tools/private_temp"
 
 release_cli :: proc(
 	t: ^testing.T,
@@ -28,7 +29,7 @@ release_verifies_every_suite_and_preserves_checkout_on_failure_or_retry :: proc(
 	mem.dynamic_arena_init(&arena)
 	defer mem.dynamic_arena_destroy(&arena)
 	context.allocator = mem.dynamic_arena_allocator(&arena)
-	tmp, dir_err := os.make_directory_temp("", "kakunou release test-*", context.allocator)
+	tmp, dir_err := private_temp.create("kakunou release test")
 	if !testing.expect_value(t, dir_err, nil) {
 		return
 	}
@@ -160,7 +161,15 @@ tasks:
 		}
 		return os.exists(path)
 	}
-	ready := wait_for_file(fmt.tprintf("%s.ready", mode))
+	ready_path := fmt.tprintf("%s.ready", mode)
+	ready := wait_for_file(ready_path)
+	if ready {
+		stage, read_err := os.read_entire_file(ready_path, context.allocator)
+		testing.expect_value(t, read_err, nil)
+		info, stat_err := os.stat(strings.trim_space(string(stage)), context.allocator)
+		testing.expect_value(t, stat_err, nil)
+		testing.expect_value(t, info.mode & os.Permissions_All, os.Permissions{.Read_User, .Write_User, .Execute_User})
+	}
 	kill_err := os.process_kill(child)
 	_, wait_err := os.process_wait(child)
 	os.remove(block)
@@ -213,4 +222,15 @@ tasks:
 	testing.expect_value(t, git(t, repo, env[:], "cat-file", "-t", "v0.2.1"), "tag")
 	testing.expect_value(t, git(t, repo, env[:], "status", "--porcelain"), "")
 	testing.expect_value(t, release_cli(t, repo, env[:], {tool, "current"}), "v0.2.1")
+}
+
+@(test)
+release_workflow_verifies_prepared_merges_and_resumes_only_its_own_tag :: proc(t: ^testing.T) {
+	context.allocator = context.temp_allocator
+	dir, err := private_temp.create("kakunou-publish")
+	if !testing.expect_value(t, err, nil) {
+		return
+	}
+	defer os.remove_all(dir)
+	release_cli(t, ".", nil, {"bash", "tests/integration/fixtures/release_workflow.sh", dir})
 }

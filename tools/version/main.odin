@@ -19,9 +19,15 @@ run :: proc(args: []string) -> bool {
 			tag, _ := version_literal(source) or_return
 			fmt.println(tag)
 			return true
+		case "prepare":
+			return prepared_version("origin/main", true)
 		case "next", "release":
 			return repository_version(args[0] == "release")
 		}
+	}
+
+	if len(args) == 2 && args[0] == "verify" {
+		return prepared_version(args[1], false)
 	}
 
 	if len(args) == 2 && args[0] == "latest" {
@@ -34,7 +40,7 @@ run :: proc(args: []string) -> bool {
 	}
 
 	if len(args) != 3 || args[0] != "next" {
-		fmt.fprintln(os.stderr, "usage: kakunou-version current | next [<base-tag> <git-log>] | latest <tag-list> | release")
+		fmt.fprintln(os.stderr, "usage: kakunou-version current | next [<base-tag> <git-log>] | latest <tag-list> | prepare | verify <base-commit> | release")
 		return false
 	}
 

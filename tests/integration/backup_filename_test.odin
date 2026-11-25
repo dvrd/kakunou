@@ -16,7 +16,7 @@ backup_uses_literal_relative_filenames :: proc(t: ^testing.T) {
 	// The parallel test runner shares one working directory. Run the relative
 	// pathname check in a child whose working directory belongs to this test.
 	if os.get_env("KAKUNOU_LITERAL_BACKUP_CHILD", context.temp_allocator) != "1" {
-		directory, err := os.make_directory_temp("", "kakunou-literal-backup-*", context.temp_allocator)
+		directory, err := make_backup_fixture("kakunou-literal-backup-", context.temp_allocator)
 		if !testing.expect_value(t, err, nil) {
 			return
 		}
