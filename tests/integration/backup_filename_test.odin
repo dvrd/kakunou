@@ -1,4 +1,3 @@
-#+build !windows
 package integration_tests
 
 import "core:fmt"
@@ -9,6 +8,11 @@ import db "shared:kakunou"
 
 @(test)
 backup_uses_literal_relative_filenames :: proc(t: ^testing.T) {
+	when ODIN_OS == .Windows {
+		// Windows filenames cannot contain the colon in these SQLite names.
+		return
+	}
+
 	// The parallel test runner shares one working directory. Run the relative
 	// pathname check in a child whose working directory belongs to this test.
 	if os.get_env("KAKUNOU_LITERAL_BACKUP_CHILD", context.temp_allocator) != "1" {
