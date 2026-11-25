@@ -24,7 +24,8 @@ tasks:
       - '"$KAKUNOU_COMPILER" run tools/check -vet -warnings-as-errors -out:"{{.RUNNER}}" -- build {{.CLI_ARGS}}'
 
   test:
-    desc: Run the library suites and version-tool tests
+    silent: true
+    desc: Run unit and integration tests
     cmds:
       - '"$KAKUNOU_COMPILER" run tools/check -vet -warnings-as-errors -out:"{{.RUNNER}}" -- test {{.CLI_ARGS}}'
 

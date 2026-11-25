@@ -167,12 +167,31 @@ suites :: proc(root: string, cfg: ^Config) -> os.Error {
 	os.set_env("KAKUNOU_REAL_ODIN", cfg.compiler) or_return
 	os.set_env("KAKUNOU_STAGED_ROOT", work) or_return
 
-	for dir in selected {
+	plans: map[string][]string
+	if cfg.mode == "test" {
+		for dir in selected {
+			plans[dir] = suite_test_names(repo, dir, files, cfg.flags[:]) or_return
+		}
+	}
+	for dir, index in selected {
 		target := path(repo, dir)
 		if os.base(dir) == "internal" {
 			target = path(repo, "src", suite_owner(dir))
 		}
-		fmt.println(cfg.mode, dir)
+		if cfg.mode == "test" {
+			upcoming: [dynamic]string
+			later_tests: [dynamic]string
+			for later in selected[index+1:] {
+				append(&later_tests, ..plans[later])
+				append(&upcoming, fmt.tprintf("%s (%d)", later, len(plans[later])))
+			}
+			os.set_env("KAKUNOU_LATER_TESTS", strings.join(later_tests[:], "\n")) or_return
+			os.set_env("KAKUNOU_UPCOMING_SUITES", strings.join(upcoming[:], ", ")) or_return
+			os.set_env("KAKUNOU_SUITE_TESTS", strings.join(plans[dir], "\n")) or_return
+			fmt.println(dir)
+		} else {
+			fmt.println(cfg.mode, dir)
+		}
 		args: [dynamic]string
 		append(&args, self, "--suite-child", cfg.compiler, cfg.mode, target)
 		if cfg.mode == "build" {
@@ -185,7 +204,8 @@ suites :: proc(root: string, cfg: ^Config) -> os.Error {
 			has_out = has_out || strings.has_prefix(flag, "-out:")
 		}
 		if !has_out {
-			out := path(cfg.out, "kakunou-tests") if cfg.mode == "build" else path(work, "tests")
+			out := path(cfg.out, dir, "kakunou-tests") if cfg.mode == "build" else path(work, "tests")
+			ensure_dir(os.dir(out)) or_return
 			append(&args, fmt.tprintf("-out:%s", out))
 		}
 		run_suite(repo, args[:]) or_return

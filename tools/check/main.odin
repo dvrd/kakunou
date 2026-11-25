@@ -126,10 +126,5 @@ check :: proc(args: []string) -> os.Error {
 		    fmt.tprintf("-out:%s", path(cfg.out, "kakunou-version"))) or_return
 	}
 
-	suites(root, &cfg) or_return
-	if cfg.mode == "test" {
-		return run(cfg.compiler, "test", "tools/version", "-vet", "-warnings-as-errors", "-o:none",
-		           fmt.tprintf("-out:%s", path(cfg.out, "kakunou-version-tests")))
-	}
-	return nil
+	return suites(root, &cfg)
 }

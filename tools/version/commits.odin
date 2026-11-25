@@ -1,4 +1,4 @@
-package main
+package version_tool
 
 import "core:strings"
 

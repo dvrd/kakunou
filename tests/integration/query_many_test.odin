@@ -1,4 +1,4 @@
-package tests
+package integration_tests
 
 import "core:encoding/json"
 import "core:mem"

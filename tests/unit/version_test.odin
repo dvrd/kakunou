@@ -1,4 +1,4 @@
-package tests
+package unit_tests
 
 import "core:testing"
 import db "shared:kakunou"

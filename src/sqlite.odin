@@ -129,7 +129,11 @@ connection_mutex :: proc(database: ^SQLite_DB) -> ^SQLite_Mutex {
 
 open :: proc(database: ^^SQLite_DB, path: cstring) -> Database_Error {
 	if database == nil || path == nil {
-		return make_error(.Open_Failed, "Database output and path are required", sqlite_code = .MISUSE)
+		return make_error(
+			.Open_Failed,
+			"Database output and path are required",
+			sqlite_code = .MISUSE,
+		)
 	}
 
 	if database^ != nil {
@@ -141,7 +145,12 @@ open :: proc(database: ^^SQLite_DB, path: cstring) -> Database_Error {
 		)
 	}
 
-	result := sqlite3_open_v2(path, database, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX, nil)
+	result := sqlite3_open_v2(
+		path,
+		database,
+		SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX,
+		nil,
+	)
 
 	mutex_missing := result == .OK && connection_mutex(database^) == nil
 
@@ -161,7 +170,12 @@ open :: proc(database: ^^SQLite_DB, path: cstring) -> Database_Error {
 			result = .MISUSE
 		}
 
-		err := make_error(.Open_Failed, message, sqlite_code = result, subject = cast(string)(path))
+		err := make_error(
+			.Open_Failed,
+			message,
+			sqlite_code = result,
+			subject = cast(string)(path),
+		)
 
 		if database^ != nil {
 			err.cleanup_code = sqlite3_close(database^)
@@ -220,6 +234,7 @@ begin_read :: proc(database: ^SQLite_DB) -> Database_Error {
 begin :: proc(database: ^SQLite_DB, sql: cstring) -> Database_Error {
 	mutex := connection_mutex(database)
 	sqlite3_mutex_enter(mutex)
+
 	err := execute_sql_unlocked(database, sql)
 	if err.kind != .None {
 		sqlite3_mutex_leave(mutex)
@@ -290,8 +305,13 @@ prepare :: proc(
 	} else if statement == nil {
 		err = make_error(.Execution_Failed, empty, sqlite_code = .MISUSE)
 	} else if sql_tail_has_statement(tail) {
-		err = make_error(.Execution_Failed, "SQL contains more than one statement", sqlite_code = .MISUSE)
+		err = make_error(
+			.Execution_Failed,
+			"SQL contains more than one statement",
+			sqlite_code = .MISUSE,
+		)
 	}
+
 	return
 }
 
@@ -373,11 +393,16 @@ skip_sql_block_comment :: proc(body: string) -> (rest: string, closed: bool) {
 
 // Finalize before taking a return-value snapshot. Odin defers cannot modify a
 // returned error, so cleanup diagnostics must be attached in explicit control flow.
-statement_finalize :: proc(statement: ^SQLite_Statement, error: ^Database_Error, message: string) -> bool {
+statement_finalize :: proc(
+	statement: ^SQLite_Statement,
+	error: ^Database_Error,
+	message: string,
+) -> bool {
 	assert(error != nil)
 	if statement == nil {
 		return true
 	}
+
 	code := sqlite3_finalize(statement)
 	if code == .OK {
 		return true
@@ -404,19 +429,27 @@ query_one :: proc(
 	err: Database_Error,
 ) {
 	if database == nil || sql == nil || output == nil || decode == nil {
-		return false, make_error(.Execution_Failed, "Invalid query arguments", sqlite_code = .MISUSE)
+		return false, make_error(
+			.Execution_Failed,
+			"Invalid query arguments",
+			sqlite_code = .MISUSE,
+		)
 	}
+
 	mutex := connection_mutex(database)
 	sqlite3_mutex_enter(mutex)
 	defer sqlite3_mutex_leave(mutex)
+
 	statement: ^SQLite_Statement
 	statement, err = prepare(database, sql, "Empty query")
 	if err.kind == .None {
 		found, err = query_one_row(database, statement, parameters, output, decode)
 	}
+
 	if !statement_finalize(statement, &err, "Could not finalize query") {
 		found = false
 	}
+
 	return
 }
 
@@ -434,14 +467,18 @@ query_one_row :: proc(
 	if error.kind != .None {
 		return false, error
 	}
+
 	result := sqlite3_step(statement)
 	if result == .DONE {
 		return false, {}
 	}
+
 	if result != .ROW {
 		return false, sqlite_failure(database, result)
 	}
+
 	error = decode(statement, output)
+
 	return error.kind == .None, error
 }
 
@@ -482,6 +519,7 @@ make_error :: proc(
 		sqlite_code     = sqlite_code,
 		allocator_error = allocator_error,
 	}
+
 	copy(err.message[:len(err.message) - 1], message)
 	copy(err.subject[:len(err.subject) - 1], subject)
 

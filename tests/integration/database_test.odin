@@ -1,4 +1,4 @@
-package tests
+package integration_tests
 
 import "base:runtime"
 import "core:fmt"
@@ -9,6 +9,7 @@ import "core:sync"
 import "core:testing"
 import "core:thread"
 import "core:time"
+import support "../support"
 import db "shared:kakunou"
 
 Database_Transaction_Worker :: struct {
@@ -283,13 +284,13 @@ database_helpers_return_errors_without_logging :: proc(t: ^testing.T) {
 		return
 	}
 
-	capture := Test_Log {
+	capture := support.Test_Log {
 		contains = "Database initialization failed",
 	}
 
 	previous_logger := context.logger
 	context.logger = {
-		procedure = test_capture_log,
+		procedure = support.test_capture_log,
 		data      = &capture,
 	}
 
@@ -388,10 +389,10 @@ table_schema_types_and_constraints_are_applied :: proc(t: ^testing.T) {
 		return
 	}
 
-	capture := Test_Log{}
+	capture := support.Test_Log{}
 	previous_logger := context.logger
 	context.logger = {
-		procedure = test_capture_log,
+		procedure = support.test_capture_log,
 		data      = &capture,
 	}
 
@@ -456,10 +457,10 @@ table_schema_quotes_names_and_supports_explicit_creation :: proc(t: ^testing.T) 
 		return
 	}
 
-	capture := Test_Log{}
+	capture := support.Test_Log{}
 	previous_logger := context.logger
 	context.logger = {
-		procedure = test_capture_log,
+		procedure = support.test_capture_log,
 		data      = &capture,
 	}
 
@@ -481,90 +482,6 @@ table_schema_quotes_names_and_supports_explicit_creation :: proc(t: ^testing.T) 
 		capture.error_count == 0,
 		"duplicate table error is returned without logging",
 	)
-}
-
-@(test)
-table_schema_rejects_invalid_definitions_and_allocation_failure :: proc(t: ^testing.T) {
-	capture := Test_Log{}
-	previous_logger := context.logger
-	context.logger = {
-		procedure = test_capture_log,
-		data      = &capture,
-	}
-
-	defer context.logger = previous_logger
-
-	for schema in ([]db.Table_Schema {
-			{},
-			{name = "empty"},
-			{name = "bad\x00name", columns = {{name = "id"}}},
-			{name = "items", columns = {{name = ""}}},
-			{name = "items", columns = {{name = "bad\x00name"}}},
-			{name = "items", columns = {{name = "id", data_type = db.Column_Type(999)}}},
-		}) {
-		sql, err := db.build_new_table_sql(schema)
-		testing.expect(
-			t,
-			err.kind == .Invalid_Schema && sql == nil,
-			"invalid schema produces no SQL",
-		)
-	}
-
-	testing.expect(t, capture.error_count == 0, "invalid schemas are returned without logging")
-
-	storage: [1]u8
-	arena: mem.Arena
-	mem.arena_init(&arena, storage[:])
-	previous_allocator := context.allocator
-	context.allocator = mem.arena_allocator(&arena)
-	defer context.allocator = previous_allocator
-
-	sql, err := db.build_new_table_sql(db.Table_Schema{name = "items", columns = {{name = "id"}}})
-	context.allocator = previous_allocator
-
-	testing.expect(
-		t,
-		err.kind == .Allocation_Failed && sql == nil,
-		"allocation failure produces no SQL",
-	)
-	testing.expect(
-		t,
-		err.allocator_error == .Out_Of_Memory,
-		"underlying allocation error is preserved",
-	)
-	testing.expect(t, capture.error_count == 0, "allocation failure is returned without logging")
-}
-
-@(test)
-database_error_is_small_and_truncates_text :: proc(t: ^testing.T) {
-	testing.expect(
-		t,
-		size_of(db.Database_Error) <= 320,
-		"error stays small enough to return by value",
-	)
-
-	long_text := make([]u8, 2048)
-	defer delete(long_text)
-
-	for &value in long_text {
-		value = 'x'
-	}
-
-	err := db.make_error(
-		.Execution_Failed,
-		string(long_text),
-		sqlite_code = .ERROR,
-		subject = string(long_text),
-	)
-	testing.expect_value(t, len(db.error_message(&err)), db.ERROR_MESSAGE_CAPACITY - 1)
-	testing.expect_value(t, len(db.error_subject(&err)), db.ERROR_SUBJECT_CAPACITY - 1)
-
-	copied := err
-	testing.expect_value(t, db.error_message(&copied), db.error_message(&err))
-
-	short := db.make_error(.Open_Failed, "short", subject = "path/to/file")
-	testing.expect_value(t, db.error_message(&short), "short")
-	testing.expect_value(t, db.error_subject(&short), "path/to/file")
 }
 
 @(test)

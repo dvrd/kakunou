@@ -97,6 +97,7 @@ column_int_optional :: proc(
 	if err = column_index(statement, column); err.kind != .None {
 		return
 	}
+
 	if sqlite3_column_type(statement, cast(i32)(column)) == .NULL {
 		return
 	}
@@ -146,6 +147,7 @@ column_blob :: proc(
 	if err = column_index(statement, column); err.kind != .None {
 		return
 	}
+
 	if sqlite3_column_type(statement, cast(i32)column) != .BLOB {
 		return nil, make_error(
 			.Execution_Failed,
@@ -153,11 +155,13 @@ column_blob :: proc(
 			sqlite_code = .MISMATCH,
 		)
 	}
+
 	length := sqlite3_column_bytes(statement, cast(i32)column)
 	pointer := sqlite3_column_blob(statement, cast(i32)column)
 	if length > 0 && pointer == nil {
 		return nil, make_error(.Execution_Failed, "Could not read blob", sqlite_code = .NOMEM)
 	}
+
 	allocation_error: mem.Allocator_Error
 	bytes, allocation_error = make([]u8, cast(int)length, allocator)
 	if allocation_error != nil {
@@ -167,7 +171,9 @@ column_blob :: proc(
 			allocator_error = allocation_error,
 		)
 	}
+
 	copy(bytes, (cast([^]u8)pointer)[:cast(int)length])
+
 	return bytes, {}
 }
 
@@ -303,6 +309,7 @@ query_many :: proc(
 	if database == nil || sql == nil || decode == nil {
 		return nil, make_error(.Execution_Failed, "Invalid query arguments", sqlite_code = .MISUSE)
 	}
+
 	if max_rows < 1 || max_rows > QUERY_ROWS_LIMIT {
 		return nil, make_error(.Execution_Failed, "Invalid query row limit", sqlite_code = .MISUSE)
 	}
@@ -314,13 +321,13 @@ query_many :: proc(
 	statement, err = prepare(database, sql, "Empty query")
 	if err.kind == .None {
 		err = bind_parameters(database, statement, parameters)
-	}
-	if err.kind == .None {
 		rows, err = query_many_rows(database, statement, decode, max_rows)
 	}
+
 	if !statement_finalize(statement, &err, "Could not finalize query") {
 		rows = nil
 	}
+
 	return
 }
 
@@ -335,6 +342,7 @@ query_many_rows :: proc(
 ) {
 	assert(max_rows > 0)
 	assert(max_rows <= QUERY_ROWS_LIMIT)
+
 	// Keep an empty result non-nil so JSON APIs return [] rather than null.
 	values, allocation_error := make([dynamic]T, 0, min(8, max_rows), context.temp_allocator)
 	if allocation_error != nil {
@@ -344,6 +352,7 @@ query_many_rows :: proc(
 			allocator_error = allocation_error,
 		)
 	}
+
 	// One extra step distinguishes an exact-limit result from an excess row.
 	for row_index in 0 ..< max_rows + 1 {
 		result := sqlite3_step(statement)

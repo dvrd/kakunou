@@ -43,6 +43,14 @@ start_suite_child :: proc(args: []string) {
 	if len(args) == 0 || posix.setpgid(0, 0) == .FAIL {
 		os.exit(1)
 	}
+	if len(args) >= 2 && args[1] == "test" {
+		code, err := report_tests(args)
+		if err != nil {
+			fmt.eprintln("kakunou: reading test output:", os.error_string(err))
+			os.exit(1)
+		}
+		os.exit(code)
+	}
 	exec(args)
 }
 

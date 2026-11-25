@@ -1,7 +1,5 @@
-package tests
+package integration_tests
 
-import "core:log"
-import "core:strings"
 import "core:testing"
 import db "shared:kakunou"
 
@@ -58,33 +56,4 @@ test_insert_database :: proc(t: ^testing.T) -> (database: ^db.SQLite_DB, ok: boo
 	ok = testing.expect(t, err.kind == .None, "create insert fixture table")
 
 	return
-}
-
-Test_Log :: struct {
-	warning_count:  int,
-	warning:        string,
-	warning_buffer: [2048]u8,
-	error_count:    int,
-	contains:       string,
-	matched:        bool,
-}
-
-test_capture_log :: proc(
-	data: rawptr,
-	level: log.Level,
-	text: string,
-	options: log.Options,
-	location := #caller_location,
-) {
-	capture := cast(^Test_Log)data
-	if level == .Warning {
-		capture.warning_count += 1
-		length := copy(capture.warning_buffer[:], transmute([]u8)text)
-		capture.warning = string(capture.warning_buffer[:length])
-	}
-
-	if level == .Error {
-		capture.error_count += 1
-		capture.matched = capture.matched || strings.contains(text, capture.contains)
-	}
 }

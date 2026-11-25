@@ -1,12 +1,13 @@
-package main
+package unit_tests
 
 import "core:testing"
+import version "../../tools/version"
 
 @(test)
 commit_messages_report_release_impact :: proc(t: ^testing.T) {
 	cases := [?]struct {
 		message: string,
-		impact:  Impact,
+		impact:  version.Impact,
 	}{
 		{"fix: read the cached version", .Fix},
 		{"Feat(cli): add a command", .Feature},
@@ -24,36 +25,36 @@ commit_messages_report_release_impact :: proc(t: ^testing.T) {
 		{"fix: ", .None},
 	}
 	for example in cases {
-		testing.expect_value(t, commit_impact(example.message), example.impact)
+		testing.expect_value(t, version.commit_impact(example.message), example.impact)
 	}
 }
 
 @(test)
 git_log_uses_the_highest_impact :: proc(t: ^testing.T) {
-	testing.expect_value(t, release_impact(""), .None)
-	testing.expect_value(t, release_impact("docs: example\n\x00chore: bump\n\x00"), .None)
-	testing.expect_value(t, release_impact("feat: add\n\x00fix: adjust\n\x00"), .Feature)
+	testing.expect_value(t, version.release_impact(""), .None)
+	testing.expect_value(t, version.release_impact("docs: example\n\x00chore: bump\n\x00"), .None)
+	testing.expect_value(t, version.release_impact("feat: add\n\x00fix: adjust\n\x00"), .Feature)
 	messages := "fix: adjust\n\x00feat: add\n\x00refactor!: remove\n\x00"
-	testing.expect_value(t, release_impact(messages), .Breaking)
+	testing.expect_value(t, version.release_impact(messages), .Breaking)
 }
 
 @(test)
 release_bumps_follow_the_version_series :: proc(t: ^testing.T) {
-	pre_stable := Version{0, 2, 0}
-	stable := Version{1, 3, 8}
-	testing.expect_value(t, release_bump(pre_stable, .Fix), .Patch)
-	testing.expect_value(t, release_bump(pre_stable, .Feature), .Patch)
-	testing.expect_value(t, release_bump(pre_stable, .Breaking), .Minor)
-	testing.expect_value(t, release_bump(stable, .Fix), .Patch)
-	testing.expect_value(t, release_bump(stable, .Feature), .Minor)
-	testing.expect_value(t, release_bump(stable, .Breaking), .Major)
+	pre_stable := version.Version{0, 2, 0}
+	stable := version.Version{1, 3, 8}
+	testing.expect_value(t, version.release_bump(pre_stable, .Fix), .Patch)
+	testing.expect_value(t, version.release_bump(pre_stable, .Feature), .Patch)
+	testing.expect_value(t, version.release_bump(pre_stable, .Breaking), .Minor)
+	testing.expect_value(t, version.release_bump(stable, .Fix), .Patch)
+	testing.expect_value(t, version.release_bump(stable, .Feature), .Minor)
+	testing.expect_value(t, version.release_bump(stable, .Breaking), .Major)
 }
 
 @(test)
 highest_tag_ignores_names_that_are_not_releases :: proc(t: ^testing.T) {
-	highest, ok := highest_tag({"v0.9.0", "v0.10.0", "nightly", "v0.2.11", ""})
+	highest, ok := version.highest_tag({"v0.9.0", "v0.10.0", "nightly", "v0.2.11", ""})
 	testing.expect(t, ok)
 	testing.expect_value(t, highest, "v0.10.0")
-	_, none := highest_tag({"nightly", "v1"})
+	_, none := version.highest_tag({"nightly", "v1"})
 	testing.expect(t, !none)
 }
