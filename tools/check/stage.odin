@@ -169,7 +169,6 @@ suites :: proc(root: string, cfg: ^Config) -> os.Error {
 	}
 	plans: map[string]Suite_Inventory
 	if cfg.mode == "test" {
-		os.set_env("KAKUNOU_VALIDATE_SELECTORS", "1" if len(selection.names) > 0 else "0") or_return
 		for dir in selected {
 			plans[dir] = suite_test_names(repo, dir, files, cfg.flags[:], selection.names[:]) or_return
 		}
@@ -205,15 +204,11 @@ suites :: proc(root: string, cfg: ^Config) -> os.Error {
 			append(&args, "-build-mode:test")
 		}
 		append(&args, shared_flag, "-vet", "-warnings-as-errors")
-		// A suite with zero matches returns success without creating a JSON report.
-		// Give each suite a fresh report path so a previous run cannot supply matches.
 		verify_selection := cfg.mode == "test" && len(selection.names) > 0
-		report_path := path(work, fmt.tprintf("results-%d.json", index))
+		report_path := path(work, fmt.tprintf("matched-%d", index)) if verify_selection else ""
+		os.set_env("KAKUNOU_MATCHED_SELECTORS", report_path) or_return
 		has_out := false
 		for flag in cfg.flags {
-			if verify_selection && strings.has_prefix(flag, JSON_REPORT_PREFIX) {
-				continue
-			}
 			append(&args, flag)
 			has_out = has_out || strings.has_prefix(flag, "-out:")
 		}
@@ -222,22 +217,9 @@ suites :: proc(root: string, cfg: ^Config) -> os.Error {
 			ensure_dir(os.dir(out)) or_return
 			append(&args, fmt.tprintf("-out:%s", out))
 		}
+		run_suite(repo, args[:]) or_return
 		if verify_selection {
-			append(&args, fmt.tprintf("%s%s", JSON_REPORT_PREFIX, report_path))
-		}
-		suite_error := run_suite(repo, args[:])
-		if verify_selection && os.exists(report_path) {
-			if selection.report != "" {
-				dest := selection.report
-				if !os.is_absolute_path(dest) {
-					dest = path(repo, dest)
-				}
-				os.copy_file(dest, report_path) or_return
-			}
 			record_matches(&selection, report_path) or_return
-		}
-		if suite_error != nil {
-			return suite_error
 		}
 	}
 	if cfg.mode == "test" {

@@ -14,7 +14,7 @@ runner_validates_selectors_across_suites_in_a_renamed_checkout :: proc(t: ^testi
 	}
 	defer os.remove_all(tmp)
 	root := fmt.tprintf("%s/renamed-checkout", tmp)
-	for subdir in ([]string{"src", "tests/alpha", "tests/beta"}) {
+	for subdir in ([]string{"src", "tests/alpha", "tests/beta", "tests/gamma"}) {
 		if !testing.expect_value(t, os.make_directory_all(fmt.tprintf("%s/%s", root, subdir)), nil) {
 			return
 		}
@@ -44,6 +44,17 @@ when #config(ENABLE_TEST, true) {
 import "core:testing"
 @(test)
 excluded :: proc(t: ^testing.T) { testing.expect(t, false) }
+`) ||
+	   !write(t, root, "tests/gamma/gamma_test.odin", `package gamma
+import "core:testing"
+@(test)
+unconditional :: proc(t: ^testing.T) { testing.expect(t, true) }
+`) ||
+	   !write(t, root, "tests/gamma/gated.odin", `#+build windows
+package gamma
+import "core:testing"
+@(test)
+tag_excluded :: proc(t: ^testing.T) { testing.expect(t, false) }
 `) {
 		return
 	}
@@ -64,25 +75,32 @@ excluded :: proc(t: ^testing.T) { testing.expect(t, false) }
 		return
 	}
 
-	execute :: proc(t: ^testing.T, root, runner, compiler, selector: string, success: bool) -> string {
+	execute :: proc(t: ^testing.T, root, runner, compiler, selector: string, success: bool, quiet := false) -> string {
+		command: [dynamic]string
+		append(&command, runner, "test", "--package", "all", "--odin", compiler, "--shared", "../external",
+		                           fmt.tprintf("-define:ODIN_TEST_NAMES=%s", selector))
+		if quiet {
+			append(&command, "-define:ODIN_TEST_LOG_STATE_CHANGES=false")
+		}
 		run, out, logs, err := os.process_exec({
 			working_dir = root,
-			command = {runner, "test", "--package", "all", "--odin", compiler, "--shared", "../external",
-			           fmt.tprintf("-define:ODIN_TEST_NAMES=%s", selector)},
+			command = command[:],
 		}, context.allocator)
 		testing.expect_value(t, err, nil)
 		testing.expect(t, run.success == success, string(logs))
 		return strings.concatenate({string(out), string(logs)})
 	}
 
-	log := execute(t, root, runner, compiler, "local_alias,beta.conditional,", true)
+	log := execute(t, root, runner, compiler, "local_alias,beta.conditional,gamma.unconditional,", true)
 	testing.expect(t, strings.contains(log, "PASS  alpha.local_alias"), log)
 	testing.expect(t, strings.contains(log, "PASS  beta.conditional"), log)
+	testing.expect(t, strings.contains(log, "PASS  gamma.unconditional"), log)
 	testing.expect(t, strings.contains(log, "queue unknown"), log)
 	testing.expect(t, strings.contains(log, "tests/beta (count unknown)"), log)
+	testing.expect(t, strings.contains(log, "tests/gamma (count unknown)"), log)
 	testing.expect(t, !strings.contains(log, "WAIT  alpha.excluded"), log)
 
-	for selector in ([]string{"alpha.excluded", "beta.conditional,does_not_exist"}) {
+	for selector in ([]string{"alpha.excluded,gamma.tag_excluded", "beta.conditional,does_not_exist"}) {
 		miss := execute(t, root, runner, compiler, selector, false)
 		testing.expect(t, strings.contains(miss, "no selected test matched"), miss)
 	}
@@ -95,6 +113,6 @@ excluded :: proc(t: ^testing.T) { testing.expect(t, false) }
 	   !write(t, tmp, "external/additional/dependency.odin", "package additional\nVALUE :: true\n") {
 		return
 	}
-	resolved := execute(t, root, runner, compiler, "beta.conditional", true)
-	testing.expect(t, strings.contains(resolved, "PASS  beta.conditional"), resolved)
+	resolved := execute(t, root, runner, compiler, "beta.conditional", true, quiet = true)
+	testing.expect(t, !strings.contains(resolved, "PASS  beta.conditional"), resolved)
 }
