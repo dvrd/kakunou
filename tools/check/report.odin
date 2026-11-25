@@ -38,6 +38,8 @@ report_tests :: proc(args: []string) -> (code: int, err: os.Error) {
 		return 1, start_err
 	}
 	progress := Progress{live = live, color = live && env("NO_COLOR") == ""}
+	progress.validate_selectors = env("KAKUNOU_VALIDATE_SELECTORS") == "1"
+	progress.unknown_queue = env("KAKUNOU_QUEUE_UNKNOWN") == "1"
 	progress.upcoming = env("KAKUNOU_UPCOMING_SUITES")
 	later := env("KAKUNOU_LATER_TESTS")
 	if later != "" {
@@ -87,7 +89,7 @@ report_tests :: proc(args: []string) -> (code: int, err: os.Error) {
 }
 
 Progress :: struct {
-	live, color: bool,
+	live, color, unknown_queue, validate_selectors: bool,
 	visible_rows, finished: int,
 	active: [dynamic]Running_Test,
 	queued: [dynamic]string,
@@ -127,6 +129,9 @@ show_status :: proc(p: ^Progress, snapshot := false) {
 		fmt.eprintf("%s%s%s", color, clipped, "\x1b[0m" if color != "" else "")
 	}
 	summary := fmt.tprintf("%d done | %d running | %d queued in suite", p.finished, len(p.active), len(p.queued))
+	if p.unknown_queue {
+		summary = fmt.tprintf("%d done | %d running | queue unknown", p.finished, len(p.active))
+	}
 	row(summary, width, "\x1b[36m" if p.color else "")
 	rows := 1
 	if p.upcoming != "" && height > 3 {
@@ -160,6 +165,11 @@ show_status :: proc(p: ^Progress, snapshot := false) {
 }
 
 report_line :: proc(line: string, p: ^Progress) {
+	// A selector may belong to a later suite. The parent checks the union of
+	// Odin's JSON results and prints every unresolved name once.
+	if p.validate_selectors && strings.has_prefix(line, "No test found for the name: ") {
+		return
+	}
 	info_prefix :: "[INFO ] --- "
 	message := strings.trim_right(strings.trim_prefix(line, info_prefix), "\r\n")
 	if strings.has_prefix(line, info_prefix) {

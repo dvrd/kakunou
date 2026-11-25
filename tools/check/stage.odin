@@ -84,18 +84,13 @@ collect_imports :: proc(file, boundary, shared: string, pending: ^[dynamic]strin
 }
 
 suites :: proc(root: string, cfg: ^Config) -> os.Error {
-	library := os.base(root)
-	if os.exists(path(root, ".git")) {
-		common := output(root, "git", "rev-parse", "--path-format=absolute", "--git-common-dir") or_return
-		library = os.base(path(os.dir(common)))
-	}
 	work := os.make_directory_temp("", "odin-library-tests-*", context.allocator) or_return
 	defer os.remove_all(work)
 	repo := path(work, "repository")
 	shared := path(work, "shared")
 	files := copy_tree(root, repo) or_return
 	ensure_dir(shared) or_return
-	os.symlink(path(repo, "src"), path(shared, library)) or_return
+	os.symlink(path(repo, "src"), path(shared, "kakunou")) or_return
 
 	directories: map[string]bool
 	pending: [dynamic]string
@@ -122,7 +117,7 @@ suites :: proc(root: string, cfg: ^Config) -> os.Error {
 		}
 	}
 	seen: map[string]bool
-	seen[library] = true
+	seen["kakunou"] = true
 	for i := 0; i < len(pending); i += 1 {
 		name := pending[i]
 		if seen[name] {
@@ -167,10 +162,16 @@ suites :: proc(root: string, cfg: ^Config) -> os.Error {
 	os.set_env("KAKUNOU_REAL_ODIN", cfg.compiler) or_return
 	os.set_env("KAKUNOU_STAGED_ROOT", work) or_return
 
-	plans: map[string][]string
+	selection := test_selection(cfg.flags[:])
+	shared_flag := fmt.tprintf("-collection:shared=%s", shared)
+	if cfg.mode == "build" {
+		run(cfg.compiler, "check", path(repo, "src"), shared_flag, "-no-entry-point", "-vet", "-warnings-as-errors") or_return
+	}
+	plans: map[string]Suite_Inventory
 	if cfg.mode == "test" {
+		os.set_env("KAKUNOU_VALIDATE_SELECTORS", "1" if len(selection.names) > 0 else "0") or_return
 		for dir in selected {
-			plans[dir] = suite_test_names(repo, dir, files, cfg.flags[:]) or_return
+			plans[dir] = suite_test_names(repo, dir, files, cfg.flags[:], selection.names[:]) or_return
 		}
 	}
 	for dir, index in selected {
@@ -182,12 +183,18 @@ suites :: proc(root: string, cfg: ^Config) -> os.Error {
 			upcoming: [dynamic]string
 			later_tests: [dynamic]string
 			for later in selected[index+1:] {
-				append(&later_tests, ..plans[later])
-				append(&upcoming, fmt.tprintf("%s (%d)", later, len(plans[later])))
+				plan := plans[later]
+				if plan.known {
+					append(&later_tests, ..plan.names)
+					append(&upcoming, fmt.tprintf("%s (%d)", later, len(plan.names)))
+				} else {
+					append(&upcoming, fmt.tprintf("%s (count unknown)", later))
+				}
 			}
 			os.set_env("KAKUNOU_LATER_TESTS", strings.join(later_tests[:], "\n")) or_return
 			os.set_env("KAKUNOU_UPCOMING_SUITES", strings.join(upcoming[:], ", ")) or_return
-			os.set_env("KAKUNOU_SUITE_TESTS", strings.join(plans[dir], "\n")) or_return
+			os.set_env("KAKUNOU_SUITE_TESTS", strings.join(plans[dir].names, "\n")) or_return
+			os.set_env("KAKUNOU_QUEUE_UNKNOWN", "0" if plans[dir].known else "1") or_return
 			fmt.println(dir)
 		} else {
 			fmt.println(cfg.mode, dir)
@@ -197,9 +204,16 @@ suites :: proc(root: string, cfg: ^Config) -> os.Error {
 		if cfg.mode == "build" {
 			append(&args, "-build-mode:test")
 		}
-		append(&args, fmt.tprintf("-collection:shared=%s", shared), "-vet", "-warnings-as-errors")
+		append(&args, shared_flag, "-vet", "-warnings-as-errors")
+		// A suite with zero matches returns success without creating a JSON report.
+		// Give each suite a fresh report path so a previous run cannot supply matches.
+		verify_selection := cfg.mode == "test" && len(selection.names) > 0
+		report_path := path(work, fmt.tprintf("results-%d.json", index))
 		has_out := false
 		for flag in cfg.flags {
+			if verify_selection && strings.has_prefix(flag, JSON_REPORT_PREFIX) {
+				continue
+			}
 			append(&args, flag)
 			has_out = has_out || strings.has_prefix(flag, "-out:")
 		}
@@ -208,7 +222,34 @@ suites :: proc(root: string, cfg: ^Config) -> os.Error {
 			ensure_dir(os.dir(out)) or_return
 			append(&args, fmt.tprintf("-out:%s", out))
 		}
-		run_suite(repo, args[:]) or_return
+		if verify_selection {
+			append(&args, fmt.tprintf("%s%s", JSON_REPORT_PREFIX, report_path))
+		}
+		suite_error := run_suite(repo, args[:])
+		if verify_selection && os.exists(report_path) {
+			if selection.report != "" {
+				dest := selection.report
+				if !os.is_absolute_path(dest) {
+					dest = path(repo, dest)
+				}
+				os.copy_file(dest, report_path) or_return
+			}
+			record_matches(&selection, report_path) or_return
+		}
+		if suite_error != nil {
+			return suite_error
+		}
+	}
+	if cfg.mode == "test" {
+		missing: [dynamic]string
+		for selector in selection.names {
+			if !selection.matched[selector] {
+				append(&missing, selector)
+			}
+		}
+		if len(missing) > 0 {
+			return fail("no selected test matched", strings.join(missing[:], ", "))
+		}
 	}
 	return nil
 }
