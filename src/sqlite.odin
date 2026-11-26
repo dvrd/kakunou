@@ -109,6 +109,8 @@ foreign sqlite {
 
 	sqlite3_exec :: proc "c" (database: ^SQLite_DB, sql: cstring, callback: proc "c" (data: rawptr, column_count: i32, values: [^]cstring, names: [^]cstring) -> SQLite_Result, data: rawptr, error_message: ^cstring) -> SQLite_Result ---
 
+	sqlite3_reset :: proc "c" (statement: ^SQLite_Statement) -> SQLite_Result ---
+
 	sqlite3_finalize :: proc "c" (statement: ^SQLite_Statement) -> SQLite_Result ---
 
 	sqlite3_last_insert_rowid :: proc "c" (database: ^SQLite_DB) -> i64 ---

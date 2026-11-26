@@ -7,7 +7,6 @@ import "core:time"
 
 foreign import sqlite "system:sqlite3"
 foreign sqlite {
-	sqlite3_reset :: proc "c" (statement: ^db.SQLite_Statement) -> db.SQLite_Result ---
 	sqlite3_libversion :: proc "c" () -> cstring ---
 }
 
@@ -22,14 +21,26 @@ check :: proc(err: db.Database_Error) {
 	}
 }
 
-sample :: proc(reuse: bool) -> f64 {
+Insert_Path :: enum { Per_Call, Reuse, Batch }
+
+sample :: proc(path: Insert_Path) -> f64 {
 	database: ^db.SQLite_DB
 	check(db.open(&database, ":memory:"))
 	defer db.close(database)
 	check(db.execute_sql(database, "CREATE TABLE items(value INTEGER NOT NULL)"))
 	check(db.begin_immediate(database))
 	start := time.tick_now()
-	if reuse {
+	switch path {
+	case .Batch:
+		buffer: [256][1]db.SQLite_Value
+		for start := 0; start < ROWS; start += len(buffer) {
+			rows := buffer[:min(ROWS-start, len(buffer))]
+			for &row, i in rows {
+				row[0] = i64(start+i)
+			}
+			check(db.insert_many(database, SQL, rows))
+		}
+	case .Reuse:
 		statement, err := db.prepare(database, SQL, "empty insert")
 		check(err)
 		for i in 0..<ROWS {
@@ -37,13 +48,13 @@ sample :: proc(reuse: bool) -> f64 {
 			mutex := db.connection_mutex(database)
 			db.sqlite3_mutex_enter(mutex)
 			check(db.insert_statement(database, statement, {i64(i)}))
-			code := sqlite3_reset(statement)
+			code := db.sqlite3_reset(statement)
 			db.sqlite3_mutex_leave(mutex)
 			if code != .OK do panic("reset failed")
 		}
 		db.statement_finalize(statement, &err, "finalize failed")
 		check(err)
-	} else {
+	case .Per_Call:
 		for i in 0..<ROWS {
 			check(db.insert(database, SQL, {i64(i)}))
 		}
@@ -68,18 +79,20 @@ sample :: proc(reuse: bool) -> f64 {
 main :: proc() {
 	fmt.printf("SQLite %s, %d inserts per transaction, %d measured samples per path\n",
 	           sqlite3_libversion(), ROWS, SAMPLES)
-	sample(false)
-	sample(true)
-	per_call, reused: [SAMPLES]f64
+	paths := [?]Insert_Path{.Per_Call, .Reuse, .Batch}
+	for path in paths {
+		sample(path)
+	}
+	timings: [Insert_Path][SAMPLES]f64
 	for i in 0..<SAMPLES {
-		if i%2 == 0 {
-			per_call[i], reused[i] = sample(false), sample(true)
-		} else {
-			reused[i], per_call[i] = sample(true), sample(false)
+		for j in 0..<len(paths) {
+			path := paths[(i+j)%len(paths)]
+			timings[path][i] = sample(path)
 		}
 	}
-	slice.sort(per_call[:])
-	slice.sort(reused[:])
-	fmt.printf("Median elapsed: prepare per insert %.2f ms; reuse %.2f ms (%.2fx)\n",
-	           per_call[SAMPLES/2], reused[SAMPLES/2], per_call[SAMPLES/2]/reused[SAMPLES/2])
+	for path in paths {
+		slice.sort(timings[path][:])
+	}
+	fmt.printf("Median elapsed: prepare per insert %.2f ms; reuse %.2f ms; batch (256 rows) %.2f ms\n",
+	           timings[.Per_Call][SAMPLES/2], timings[.Reuse][SAMPLES/2], timings[.Batch][SAMPLES/2])
 }

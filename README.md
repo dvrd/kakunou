@@ -17,7 +17,21 @@ task build CHECK_DIR=/path/to/output  # Keep the compiled binaries
 
 The runner maps `shared:kakunou` to this checkout’s `src/` directory. The current library and tests need no external shared collection. For additional `shared:` imports, set `SHARED=/path/to/collection` on the task or set `WEBTOOLS_SHARED` in the environment. Use `ODIN=/path/to/odin` to select a compiler.
 
-To compare repeated inserts with reusing a single prepared statement, build `tools/bench_insert` with `odin build tools/bench_insert -o:speed -out:./insert-bench.bin` and run `./insert-bench.bin` from your checkout. It measures the insert loop inside an in-memory transaction and checks the committed row count and sum for each sample.
+To compare individual inserts, manual statement reuse, and batches of 256 rows, build `tools/bench_insert` with `odin build tools/bench_insert -o:speed -out:./insert-bench.bin` and run `./insert-bench.bin` from your checkout. It measures the insert loop inside an in-memory transaction and checks the committed row count and sum for each sample.
+
+## Repeated inserts
+
+`insert_many` prepares one SQL statement and holds the connection mutex for the batch. Supply a slice of fixed-width parameter arrays. The width must match the statement, including for an empty batch.
+
+```odin
+rows := [?][2]db.SQLite_Value{
+    {i64(1), cstring("first")},
+    {i64(2), cstring("second")},
+}
+err := db.insert_many(database, "INSERT INTO items(id, title) VALUES (?, ?)", rows[:])
+```
+
+The first error stops the batch. In autocommit mode earlier rows can already be committed. Call it inside `with_transaction` when all rows must succeed together. Rows and their text and blob storage must remain valid until the call returns.
 
 ## Writes with RETURNING
 
