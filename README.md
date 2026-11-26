@@ -108,6 +108,8 @@ A single publisher can maintain a last-known-good snapshot with this sequence:
 
 The recovery test kills a backup worker while a separate connection holds a write transaction, then opens a restored copy and checks its integrity, row count, and sum of IDs. Repeat the drill with your production database size, journal mode, and write rate. This drill covers process termination. Power-loss durability also depends on filesystem and storage flush guarantees. [Recovery rehearsal](tests/integration/backup_recovery_test.odin)
 
+Run `task reliability` to check live WAL writes and restores together. The workload, tuning options, and measured results are in the [reliability report](docs/reliability.md).
+
 ## Preparing a release
 
 Commit your changes on `develop`, fetch and merge `origin/main`, then run `task version:prepare`. It derives the version from the literal on `origin/main` and the Conventional Commits introduced by the PR. Commit the updated `src/version.odin` before opening or updating the PR to `main`. Use a merge commit to preserve the reviewed history.

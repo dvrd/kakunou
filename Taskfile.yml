@@ -43,6 +43,12 @@ tasks:
       - task: run-odin
         vars: { ODIN_ARGS: 'tools/check -vet -warnings-as-errors -- test {{.CLI_ARGS}}' }
 
+  reliability:
+    desc: Exercise concurrent WAL writes, checkpoints, backups, and restores
+    cmds:
+      - task: run-odin
+        vars: { ODIN_ARGS: 'tools/reliability -o:speed -vet -warnings-as-errors {{.CLI_ARGS}}' }
+
   version:
     desc: Print the release tag
     silent: true

@@ -1,5 +1,7 @@
 package integration_tests
 
+import "core:fmt"
+import "core:os"
 import "core:testing"
 import db "shared:kakunou"
 
@@ -70,4 +72,36 @@ automatic_rollback_case :: proc(t: ^testing.T, commit: bool) {
 	owned = false
 	testing.expect_value(t, db.commit_transaction(database).kind, .None)
 	test_database_count(t, database, "SELECT COUNT(*) FROM items", 1)
+}
+
+@(test)
+full_database_rolls_back_partial_transaction_and_accepts_later_write :: proc(t: ^testing.T) {
+	directory, err := make_backup_fixture("kakunou-full-", context.temp_allocator)
+	if !testing.expect_value(t, err, nil) do return
+	defer testing.expect_value(t, os.remove_all(directory), nil)
+	path := fmt.ctprintf("%s/limited.sqlite", directory)
+	{
+		database: ^db.SQLite_DB
+		if !testing.expect_value(t, db.open(&database, path).kind, .None) do return
+		defer testing.expect_value(t, db.sqlite3_close(database), .OK)
+		setup :: "PRAGMA page_size=4096; CREATE TABLE items(value BLOB); " +
+		         "INSERT INTO items VALUES(x'01'); PRAGMA max_page_count=4"
+		if !testing.expect_value(t, db.execute_sql(database, setup).kind, .None) do return
+		fill :: proc(c: ^db.SQLite_DB, _: bool) -> db.Database_Error {
+			err := db.execute_sql(c, "INSERT INTO items VALUES(x'02')")
+			if err.kind != .None do return err
+			return db.execute_sql(c, "INSERT INTO items VALUES(zeroblob(1048576))")
+		}
+		result := db.with_transaction(database, true, fill)
+		testing.expect_value(t, result.sqlite_code, .FULL)
+		testing.expect_value(t, result.cleanup_code, .OK)
+		testing.expect_value(t, db.sqlite3_get_autocommit(database), i32(1))
+		testing.expect_value(t, db.execute_sql(database, "INSERT INTO items VALUES(x'03')").kind, .None)
+	}
+	reopened: ^db.SQLite_DB
+	if !testing.expect_value(t, db.open(&reopened, path).kind, .None) do return
+	defer testing.expect_value(t, db.sqlite3_close(reopened), .OK)
+	test_database_count(t, reopened, "SELECT COUNT(*) FROM items", 2)
+	test_database_count(t, reopened, "SELECT COUNT(DISTINCT value) FROM items WHERE value IN (x'01',x'03')", 2)
+	test_database_count(t, reopened, "SELECT COUNT(*) FROM pragma_integrity_check WHERE integrity_check='ok'", 1)
 }

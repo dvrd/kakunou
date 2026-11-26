@@ -30,6 +30,7 @@ jobs:
           tag=$(odin run tools/version -out:"$RUNNER_TEMP/kakunou-ci-version" -- verify "$BASE")
           printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
       - run: task check PACKAGE=all INTERNAL=0
+      - run: task reliability -- -define:SOAK_SECONDS=3 -define:SOAK_SEED_MIB=2
 
   publish:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.check.outputs.tag != ''
