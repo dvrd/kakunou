@@ -205,6 +205,49 @@ insert :: proc(
 	return
 }
 
+// Execute one no-result statement per row. Earlier rows may remain on error;
+// wrap the batch in with_transaction when all rows must succeed together.
+insert_many :: proc(
+	database: ^SQLite_DB,
+	sql: cstring,
+	rows: [][$N]SQLite_Value,
+) -> (err: Database_Error) {
+	if database == nil || sql == nil {
+		return make_error(.Execution_Failed, "Database and insert SQL are required", sqlite_code = .MISUSE)
+	}
+
+	mutex := connection_mutex(database)
+	sqlite3_mutex_enter(mutex)
+	defer sqlite3_mutex_leave(mutex)
+	statement: ^SQLite_Statement
+	statement, err = prepare(database, sql, "Insert did not contain an SQL statement")
+	if err.kind == .None {
+		expected := int(sqlite3_bind_parameter_count(statement))
+		if expected != N {
+			err = parameter_count_error(expected, N)
+		} else if sqlite3_column_count(statement) != 0 {
+			err = insert_returns_rows()
+		}
+	}
+	if err.kind == .None {
+		for &row in rows {
+			if !bind_values(database, statement, row[:], &err) do break
+			result := sqlite3_step(statement)
+			if result != .DONE {
+				err = sqlite_failure(database, result)
+				break
+			}
+			result = sqlite3_reset(statement)
+			if result != .OK {
+				err = sqlite_failure(database, result)
+				break
+			}
+		}
+	}
+	statement_finalize(statement, &err, "Could not finalize insert")
+	return
+}
+
 insert_statement :: proc(
 	database: ^SQLite_DB,
 	statement: ^SQLite_Statement,
@@ -217,7 +260,7 @@ insert_statement :: proc(
 
 	// Step reports SQLITE_ROW only after the write, and finalize then commits it.
 	if sqlite3_column_count(statement) != 0 {
-		return make_error(.Execution_Failed, "Insert must not return rows", sqlite_code = .MISUSE)
+		return insert_returns_rows()
 	}
 
 	result := sqlite3_step(statement)
@@ -228,35 +271,51 @@ insert_statement :: proc(
 	return {}
 }
 
+@(private)
+insert_returns_rows :: proc() -> Database_Error {
+	return make_error(.Execution_Failed, "Insert must not return rows", sqlite_code = .MISUSE)
+}
+
+@(private)
+parameter_count_error :: proc(expected, actual: int) -> (err: Database_Error) {
+	err = make_error(.Execution_Failed, "", sqlite_code = .RANGE)
+	fmt.bprintf(err.message[:len(err.message) - 1],
+	            "SQL statement needs %d parameters, received %d", expected, actual)
+	return
+}
+
 bind_parameters :: proc(
 	database: ^SQLite_DB,
 	statement: ^SQLite_Statement,
 	parameters: []SQLite_Value,
-) -> Database_Error {
-	expected := cast(int)(sqlite3_bind_parameter_count(statement))
+) -> (err: Database_Error) {
+	expected := int(sqlite3_bind_parameter_count(statement))
 	if len(parameters) != expected {
-		err := make_error(.Execution_Failed, "", sqlite_code = .RANGE)
-		fmt.bprintf(
-			err.message[:len(err.message) - 1],
-			"SQL statement needs %d parameters, received %d",
-			expected,
-			len(parameters),
-		)
-
-		return err
+		return parameter_count_error(expected, len(parameters))
 	}
+	bind_values(database, statement, parameters, &err)
+	return
+}
 
+@(private)
+bind_values :: proc(
+	database: ^SQLite_DB,
+	statement: ^SQLite_Statement,
+	parameters: []SQLite_Value,
+	err: ^Database_Error,
+) -> bool {
 	for parameter, index in parameters {
 		result: SQLite_Result
 
 		switch value in parameter {
 		case []u8:
 			if len(value) > cast(int)max(i32) {
-				return make_error(
+				err^ = make_error(
 					.Execution_Failed,
 					"Blob exceeds SQLite limit",
 					sqlite_code = .TOOBIG,
 				)
+				return false
 			}
 
 			data := raw_data(value)
@@ -277,19 +336,21 @@ bind_parameters :: proc(
 		case cstring:
 			result = sqlite3_bind_text(statement, cast(i32)(index + 1), value, -1, nil)
 		case:
-			return make_error(
+			err^ = make_error(
 				.Execution_Failed,
 				"Unsupported SQL parameter",
 				sqlite_code = .MISUSE,
 			)
+			return false
 		}
 
 		if result != .OK {
-			return sqlite_failure(database, result)
+			err^ = sqlite_failure(database, result)
+			return false
 		}
 	}
 
-	return {}
+	return true
 }
 
 QUERY_ROWS_LIMIT :: 100000
