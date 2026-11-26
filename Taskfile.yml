@@ -8,6 +8,21 @@ env:
   KAKUNOU_OUT: '{{.CHECK_DIR | default .KAKUNOU_CHECK_DIR | default ""}}'
 
 tasks:
+  run-odin:
+    internal: true
+    silent: true
+    cmds:
+      - |
+        sh -eu -c '
+          package=$1
+          shift
+          runner_dir=$(mktemp -d "${TMPDIR:-/tmp}/kakunou-task-XXXXXXXX")
+          cleanup() { rm -f "$runner_dir/runner"; rmdir "$runner_dir"; }
+          trap cleanup EXIT
+          trap "exit 1" HUP INT TERM
+          "$KAKUNOU_COMPILER" run "$package" -out:"$runner_dir/runner" "$@"
+        ' run-odin {{.ODIN_ARGS}}
+
   default:
     desc: Type-check, build, and test
     aliases: [check]
@@ -18,33 +33,39 @@ tasks:
   build:
     desc: Type-check and build the library suites and version tool
     cmds:
-      - 'sh tools/run-odin.sh tools/check -vet -warnings-as-errors -- build {{.CLI_ARGS}}'
+      - task: run-odin
+        vars: { ODIN_ARGS: 'tools/check -vet -warnings-as-errors -- build {{.CLI_ARGS}}' }
 
   test:
     silent: true
     desc: Run unit and integration tests
     cmds:
-      - 'sh tools/run-odin.sh tools/check -vet -warnings-as-errors -- test {{.CLI_ARGS}}'
+      - task: run-odin
+        vars: { ODIN_ARGS: 'tools/check -vet -warnings-as-errors -- test {{.CLI_ARGS}}' }
 
   version:
     desc: Print the release tag
     silent: true
     cmds:
-      - 'sh tools/run-odin.sh tools/version -- current'
+      - task: run-odin
+        vars: { ODIN_ARGS: 'tools/version -- current' }
 
   version:next:
     desc: Print the next tag from Conventional Commits since the latest release
     silent: true
     cmds:
-      - 'sh tools/run-odin.sh tools/version -- next'
+      - task: run-odin
+        vars: { ODIN_ARGS: 'tools/version -- next' }
 
   version:prepare:
     desc: Prepare the version literal for a pull request against origin/main
     silent: true
     cmds:
-      - 'sh tools/run-odin.sh tools/version -- prepare'
+      - task: run-odin
+        vars: { ODIN_ARGS: 'tools/version -- prepare' }
 
   release:
     desc: Check the tree, commit the next release tag, and annotate it
     cmds:
-      - 'sh tools/run-odin.sh tools/version -- release'
+      - task: run-odin
+        vars: { ODIN_ARGS: 'tools/version -- release' }
