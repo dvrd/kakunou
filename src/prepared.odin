@@ -54,7 +54,7 @@ prepared_query_one :: #force_inline proc(
 	if !prepared_start(query, parameters, &err) do return
 	borrowed: bool
 	if bind_values(query.database, query.statement, parameters, &err, &borrowed) {
-		found, err = step_query_one(query.database, query.statement, output, decode)
+		found = step_query_one(query.database, query.statement, output, decode, &err)
 	}
 	prepared_reset(query, borrowed, &err)
 	return found && err.kind == .None, err

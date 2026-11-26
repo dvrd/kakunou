@@ -139,3 +139,32 @@ prepared_statement_releases_borrowed_values_after_partial_binding_and_decode :: 
 	}
 	testing.expect_value(t, db.with_prepared(c, "SELECT ?1 WHERE ?2='yes'", t, body).kind, .None)
 }
+
+@(test)
+prepared_lookup_preserves_the_decoder_error_and_recovers :: proc(t: ^testing.T) {
+	c, ok := test_insert_database(t)
+	if !ok do return
+	defer db.close(c)
+
+	body :: proc(q: db.Prepared_Statement, t: ^testing.T) -> db.Database_Error {
+		decode :: proc(stmt: ^db.SQLite_Statement, result: ^db.Database_Error) -> db.Database_Error {
+			return result^
+		}
+		diagnostic := db.make_error(.Execution_Failed, "invalid identifier", .MISMATCH, subject = "id")
+		diagnostic.cleanup_code = .BUSY
+		found, err := db.prepared_query_one(q, {i64(1)}, &diagnostic, decode)
+		testing.expect(t, !found)
+		testing.expect_value(t, err, diagnostic)
+
+		found, err = db.prepared_query_one(q, {i64(0)}, &diagnostic, decode)
+		testing.expect(t, !found)
+		testing.expect_value(t, err, db.Database_Error{})
+
+		diagnostic = {}
+		found, err = db.prepared_query_one(q, {i64(1)}, &diagnostic, decode)
+		testing.expect(t, found)
+		testing.expect_value(t, err, db.Database_Error{})
+		return {}
+	}
+	testing.expect_value(t, db.with_prepared(c, "SELECT 1 WHERE ?", t, body).kind, .None)
+}

@@ -538,28 +538,31 @@ query_one_row :: proc(
 		return false, error
 	}
 
-	return step_query_one(database, statement, output, decode)
+	found := step_query_one(database, statement, output, decode, &error)
+	return found, error
 }
 
+// After binding succeeds, a missing row leaves the caller's success result intact.
 @(private)
-step_query_one :: proc(
+step_query_one :: #force_inline proc(
 	database: ^SQLite_DB,
 	statement: ^SQLite_Statement,
 	output: ^$T,
 	decode: proc(statement: ^SQLite_Statement, output: ^T) -> Database_Error,
-) -> (bool, Database_Error) {
+	err: ^Database_Error,
+) -> bool {
 	result := sqlite3_step(statement)
 	if result == .DONE {
-		return false, {}
+		return false
 	}
 
 	if result != .ROW {
-		return false, sqlite_failure(database, result)
+		err^ = sqlite_failure(database, result)
+		return false
 	}
 
-	error := decode(statement, output)
-
-	return error.kind == .None, error
+	err^ = decode(statement, output)
+	return err.kind == .None
 }
 
 Database_Error_Kind :: enum {
