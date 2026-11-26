@@ -259,6 +259,11 @@ insert_statement :: proc(
 		return error
 	}
 
+	return step_insert(database, statement)
+}
+
+@(private)
+step_insert :: proc(database: ^SQLite_DB, statement: ^SQLite_Statement) -> Database_Error {
 	// Step reports SQLITE_ROW only after the write, and finalize then commits it.
 	if sqlite3_column_count(statement) != 0 {
 		return insert_returns_rows()
@@ -304,6 +309,7 @@ bind_values :: proc(
 	statement: ^SQLite_Statement,
 	parameters: []SQLite_Value,
 	err: ^Database_Error,
+	borrowed: ^bool = nil,
 ) -> bool {
 	for parameter, index in parameters {
 		result: SQLite_Result
@@ -325,6 +331,7 @@ bind_values :: proc(
 				data = raw_data(cast(string)"\x00")
 			}
 
+			if borrowed != nil do borrowed^ = true
 			result = sqlite3_bind_blob(
 				statement,
 				cast(i32)(index + 1),
@@ -335,6 +342,7 @@ bind_values :: proc(
 		case i64:
 			result = sqlite3_bind_int64(statement, cast(i32)(index + 1), value)
 		case cstring:
+			if borrowed != nil do borrowed^ = true
 			result = sqlite3_bind_text(statement, cast(i32)(index + 1), value, -1, nil)
 		case:
 			err^ = make_error(

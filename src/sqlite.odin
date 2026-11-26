@@ -112,6 +112,7 @@ foreign sqlite {
 
 	sqlite3_exec :: proc "c" (database: ^SQLite_DB, sql: cstring, callback: proc "c" (data: rawptr, column_count: i32, values: [^]cstring, names: [^]cstring) -> SQLite_Result, data: rawptr, error_message: ^cstring) -> SQLite_Result ---
 
+	sqlite3_clear_bindings :: proc "c" (statement: ^SQLite_Statement) -> SQLite_Result ---
 	sqlite3_reset :: proc "c" (statement: ^SQLite_Statement) -> SQLite_Result ---
 
 	sqlite3_finalize :: proc "c" (statement: ^SQLite_Statement) -> SQLite_Result ---
@@ -537,6 +538,16 @@ query_one_row :: proc(
 		return false, error
 	}
 
+	return step_query_one(database, statement, output, decode)
+}
+
+@(private)
+step_query_one :: proc(
+	database: ^SQLite_DB,
+	statement: ^SQLite_Statement,
+	output: ^$T,
+	decode: proc(statement: ^SQLite_Statement, output: ^T) -> Database_Error,
+) -> (bool, Database_Error) {
 	result := sqlite3_step(statement)
 	if result == .DONE {
 		return false, {}
@@ -546,7 +557,7 @@ query_one_row :: proc(
 		return false, sqlite_failure(database, result)
 	}
 
-	error = decode(statement, output)
+	error := decode(statement, output)
 
 	return error.kind == .None, error
 }

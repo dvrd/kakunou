@@ -25,6 +25,28 @@ Kakunou serializes compound operations on each connection and lets a transaction
 
 When mixing raw SQLite calls with Kakunou on a shared connection, enter `connection_mutex(database)` before the raw operation and leave it afterward so it observes Kakunou transaction boundaries. Finish all operations and join users of a connection before closing it.
 
+## Reusing a prepared statement
+
+Use `with_prepared` to parse one SQL statement once and reuse it across calls. For example, the following updates several indexed rows inside an existing transaction:
+
+```odin
+raise_scores :: proc(query: db.Prepared_Statement, ids: []i64) -> db.Database_Error {
+    for id in ids {
+        err := db.prepared_execute(query, {id})
+        if err.kind != .None do return err
+    }
+    return {}
+}
+
+err := db.with_prepared(database, "UPDATE items SET score=score+1 WHERE id=?", ids, raise_scores)
+```
+
+For a lookup, call `db.prepared_query_one(query, parameters, &value, decode)` inside the callback. It returns the same `found, err` pair as `query_one`. Each execution binds a complete parameter set, resets the statement, and releases borrowed text and blobs before returning. A missing row is successful. `prepared_execute` accepts statements that return no columns.
+
+The handle is valid only during the callback. Individual executions take the connection’s recursive lock. Join any workers using the handle before the callback returns. Inside a transaction, keep all executions on the owning thread. A decoder can use other statements on the connection. Reentering its active statement returns `.MISUSE`.
+
+Run `odin run tools/bench_prepared -o:speed` to compare one-shot and prepared indexed lookups, updates, and deletes on your SQLite build.
+
 ## Repeated inserts
 
 `insert_many` prepares one SQL statement and holds the connection mutex for the batch. Supply a slice of fixed-width parameter arrays. The width must match the statement, including for an empty batch.
