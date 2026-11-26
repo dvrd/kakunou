@@ -19,6 +19,12 @@ The runner maps `shared:kakunou` to this checkout’s `src/` directory. The curr
 
 To compare individual inserts, manual statement reuse, and batches of 256 rows, build `tools/bench_insert` with `odin build tools/bench_insert -o:speed -out:./insert-bench.bin` and run `./insert-bench.bin` from your checkout. It measures the insert loop inside an in-memory transaction and checks the committed row count and sum for each sample.
 
+## Sharing a connection
+
+Kakunou serializes compound operations on each connection and lets a transaction owner reenter them on the same thread. On supported POSIX systems with SQLite 3.44 or later, `open` attaches a separate recursive mutex to the connection. SQLite keeps its own serialized threading mode. Raw handles, older SQLite libraries, and platforms without client-data lookup use the native connection mutex.
+
+When mixing raw SQLite calls with Kakunou on a shared connection, enter `connection_mutex(database)` before the raw operation and leave it afterward so it observes Kakunou transaction boundaries. Finish all operations and join users of a connection before closing it.
+
 ## Repeated inserts
 
 `insert_many` prepares one SQL statement and holds the connection mutex for the batch. Supply a slice of fixed-width parameter arrays. The width must match the statement, including for an empty batch.

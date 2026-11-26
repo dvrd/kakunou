@@ -73,6 +73,9 @@ foreign sqlite {
 	sqlite3_busy_timeout :: proc "c" (database: ^SQLite_DB, milliseconds: i32) -> SQLite_Result ---
 	sqlite3_changes :: proc "c" (database: ^SQLite_DB) -> i32 ---
 	sqlite3_db_mutex :: proc "c" (database: ^SQLite_DB) -> ^SQLite_Mutex ---
+	sqlite3_mutex_alloc :: proc "c" (kind: i32) -> ^SQLite_Mutex ---
+	sqlite3_mutex_try :: proc "c" (mutex: ^SQLite_Mutex) -> SQLite_Result ---
+	sqlite3_mutex_free :: proc "c" (mutex: ^SQLite_Mutex) ---
 	sqlite3_mutex_enter :: proc "c" (mutex: ^SQLite_Mutex) ---
 	sqlite3_mutex_leave :: proc "c" (mutex: ^SQLite_Mutex) ---
 
@@ -120,13 +123,20 @@ foreign sqlite {
 	sqlite3_backup_finish :: proc "c" (backup: ^SQLite_Backup) -> SQLite_Result ---
 }
 
-// SQLite owns this recursive mutex for the lifetime of a FULLMUTEX connection.
-// A nil mutex is a no-op for SQLite's enter/leave routines, preserving nil-handle errors.
-connection_mutex :: proc(database: ^SQLite_DB) -> ^SQLite_Mutex {
-	if database == nil {
-		return nil
+@(private)
+operation_mutex :: proc(database: ^SQLite_DB) -> ^SQLite_Mutex {
+	when #defined(client_data) {
+		if database != nil && client_data.get != nil {
+			return cast(^SQLite_Mutex)client_data.get(database, client_mutex_key)
+		}
 	}
+	return nil
+}
 
+// Raw connections and older SQLite runtimes retain their native mutex.
+connection_mutex :: proc(database: ^SQLite_DB) -> ^SQLite_Mutex {
+	if database == nil do return nil
+	if mutex := operation_mutex(database); mutex != nil do return mutex
 	return sqlite3_db_mutex(database)
 }
 
@@ -155,10 +165,16 @@ open :: proc(database: ^^SQLite_DB, path: cstring) -> Database_Error {
 		nil,
 	)
 
-	mutex_missing := result == .OK && connection_mutex(database^) == nil
+	mutex_missing := result == .OK && sqlite3_db_mutex(database^) == nil
 
 	if result == .OK && !mutex_missing {
 		result = sqlite3_busy_timeout(database^, BUSY_TIMEOUT_MILLISECONDS)
+	}
+
+	when #defined(install_operation_mutex) {
+		if result == .OK && !mutex_missing {
+			result = install_operation_mutex(database^)
+		}
 	}
 
 	if result != .OK || mutex_missing {
