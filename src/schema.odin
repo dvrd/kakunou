@@ -302,15 +302,30 @@ backup_copy :: proc(source, destination: ^SQLite_DB) -> Database_Error {
 }
 
 @(private)
+try_backup_connection_lock :: proc(database: ^SQLite_DB) -> (^SQLite_Mutex, bool) {
+	if database == nil do return nil, true
+	// Client-data lookup enters SQLite's native mutex internally.
+	native := sqlite3_db_mutex(database)
+	if sqlite3_mutex_try(native) != .OK do return nil, false
+	mutex := connection_mutex(database)
+	if mutex == native do return mutex, true
+	acquired := sqlite3_mutex_try(mutex) == .OK
+	sqlite3_mutex_leave(native)
+	return mutex, acquired
+}
+
+@(private)
 backup_copy_with_timeout :: proc(source, destination: ^SQLite_DB, timeout: time.Duration) -> Database_Error {
 	lock_started := time.tick_now()
-	source_lock := connection_mutex(source)
-	destination_lock := connection_mutex(destination)
+	source_lock, destination_lock: ^SQLite_Mutex
 	// Either connection may already belong to a transaction. Never wait for
 	// the other handle while holding a lock acquired by this attempt.
 	for {
-		if sqlite3_mutex_try(source_lock) == .OK {
-			if sqlite3_mutex_try(destination_lock) == .OK do break
+		acquired: bool
+		source_lock, acquired = try_backup_connection_lock(source)
+		if acquired {
+			destination_lock, acquired = try_backup_connection_lock(destination)
+			if acquired do break
 			sqlite3_mutex_leave(source_lock)
 		}
 		if time.tick_since(lock_started) >= timeout {
