@@ -1,6 +1,7 @@
 package unit_tests
 
 import "core:mem"
+import "core:strings"
 import "core:testing"
 import support "../support"
 import db "shared:kakunou"
@@ -87,4 +88,20 @@ database_error_is_small_and_truncates_text :: proc(t: ^testing.T) {
 	short := db.make_error(.Open_Failed, "short", subject = "path/to/file")
 	testing.expect_value(t, db.error_message(&short), "short")
 	testing.expect_value(t, db.error_subject(&short), "path/to/file")
+}
+
+@(test)
+database_error_truncates_utf8_at_character_boundaries :: proc(t: ^testing.T) {
+	for capacity in ([2]int{db.ERROR_MESSAGE_CAPACITY, db.ERROR_SUBJECT_CAPACITY}) {
+		for character in ([]string{"é", "計", "😀"}) {
+			for overflow in 0..<len(character) {
+				length := capacity - 1 - len(character) + overflow
+				prefix := strings.repeat("a", length, context.temp_allocator)
+				text := strings.concatenate({prefix, character}, context.temp_allocator)
+				err := db.make_error(.Execution_Failed, text, subject = text)
+				actual := db.error_message(&err) if capacity == db.ERROR_MESSAGE_CAPACITY else db.error_subject(&err)
+				testing.expect_value(t, actual, text if overflow == 0 else prefix)
+			}
+		}
+	}
 }

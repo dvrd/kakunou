@@ -17,6 +17,8 @@ task build CHECK_DIR=/path/to/output  # Keep the compiled binaries
 
 The runner maps `shared:kakunou` to this checkout’s `src/` directory. The current library and tests need no external shared collection. For additional `shared:` imports, set `SHARED=/path/to/collection` on the task or set `WEBTOOLS_SHARED` in the environment. Use `ODIN=/path/to/odin` to select a compiler.
 
+To compare repeated inserts with reusing a single prepared statement, build `tools/bench_insert` with `odin build tools/bench_insert -o:speed -out:./insert-bench.bin` and run `./insert-bench.bin` from your checkout. It measures the insert loop inside an in-memory transaction and checks the committed row count and sum for each sample.
+
 ## Writes with RETURNING
 
 A `query_many` error describes the result of reading rows. In autocommit mode, SQLite can apply the write before the decoder, allocator, or row-limit check fails. For example, inserting two rows with `RETURNING id` and `max_rows = 1` can return `.TOOBIG` with both rows already inserted. Retrying that insert can duplicate the write.
@@ -35,21 +37,18 @@ insert_pair :: proc(database: ^db.SQLite_DB, limit: int) -> db.Database_Error {
         return err
     }
 
-    err := db.begin_immediate(database)
-    if err.kind != .None {
+    write :: proc(database: ^db.SQLite_DB, max_rows: int) -> db.Database_Error {
+        _, err := db.query_many(database,
+            "INSERT INTO items(id, title) VALUES (1, 'first'), (2, 'second') RETURNING id",
+            nil, decode_id, max_rows)
         return err
     }
 
-    _, err = db.query_many(database,
-        "INSERT INTO items(id, title) VALUES (1, 'first'), (2, 'second') RETURNING id",
-        nil, decode_id, limit)
-    if err.kind != .None {
-        db.rollback_transaction(database)
-        return err
-    }
-    return db.commit_transaction(database)
+    return db.with_transaction(database, limit, write)
 }
 ```
+
+`with_transaction` starts an immediate transaction and calls the body synchronously with the connection and your data. It commits when the body succeeds and rolls back when the body returns an error. Pass a fourth argument such as `"BEGIN DEFERRED"` to select a different mode. The helper owns transaction completion. Keep the callback's database work on the calling thread and leave commit, rollback and connection close to the owner. If SQLite refuses a rollback, check the returned cleanup code before reusing the connection.
 
 Use `begin(database, sql)` for a single SQLite `BEGIN` statement when selecting a transaction mode at runtime. It validates the statement before executing it. Keep the successful begin and its matching commit or rollback on the same thread. Each consumes the transaction exactly once. A failed commit handles rollback internally and releases the connection mutex. With a fresh table, the example rolls back both rows for a limit of one and commits both for a limit of two. Returned rows borrow the caller’s temporary allocator. [Transaction regression](tests/integration/query_many_test.odin)
 

@@ -3,6 +3,7 @@ package sqlite
 import "core:log"
 import "core:mem"
 import "core:strings"
+import "core:unicode/utf8"
 
 foreign import sqlite "system:sqlite3"
 
@@ -266,36 +267,71 @@ begin :: proc(database: ^SQLite_DB, sql: cstring) -> Database_Error {
 	return err
 }
 
+// The callback borrows the transaction on this thread. Only this helper finishes it.
+with_transaction :: proc(
+	database: ^SQLite_DB,
+	data: $T,
+	body: proc(database: ^SQLite_DB, data: T) -> Database_Error,
+	begin_sql: cstring = "BEGIN IMMEDIATE",
+) -> Database_Error {
+	if body == nil {
+		return make_error(.Execution_Failed, "Transaction callback is required", sqlite_code = .MISUSE)
+	}
+	if err := begin(database, begin_sql); err.kind != .None {
+		return err
+	}
+	err := body(database, data)
+	if err.kind == .None {
+		return commit_transaction(database)
+	}
+	cleanup := rollback_owned_transaction(database)
+	if cleanup.kind != .None {
+		if err.cleanup_code == .OK {
+			err.cleanup_code = cleanup.sqlite_code
+		} else {
+			log_error(cleanup, "Could not roll back transaction")
+		}
+	}
+	return err
+}
+
 // Consumes the transaction hold on BOTH success and failure. Failed COMMIT is
 // rolled back internally before releasing the mutex. Callers must clear their
 // transaction-owned flag before this call and must never roll back its failure.
 commit_transaction :: proc(database: ^SQLite_DB) -> Database_Error {
 	err := execute_sql_unlocked(database, "COMMIT;")
 
-	if err.kind != .None && (database == nil || sqlite3_get_autocommit(database) == 0) {
-		cleanup := execute_sql_unlocked(database, "ROLLBACK;")
-		if cleanup.kind != .None {
+	if err.kind == .None && sqlite3_get_autocommit(database) == 0 {
+		// An authorizer may ignore COMMIT and leave the transaction active.
+		err = make_error(.Execution_Failed, "COMMIT did not end the transaction", sqlite_code = .ERROR)
+	}
+	if err.kind != .None {
+		if cleanup := rollback_owned_transaction(database); cleanup.kind != .None {
 			err.cleanup_code = cleanup.sqlite_code
 		}
+	} else {
+		sqlite3_mutex_leave(connection_mutex(database))
 	}
-
-	sqlite3_mutex_leave(connection_mutex(database))
-
 	return err
 }
 
-// Consumes a still-owned BEGIN hold exactly once. This void API logs cleanup
-// failures because it cannot attach them to a caller's primary operational error.
-rollback_transaction :: proc(database: ^SQLite_DB) {
-	// Statement errors may already have rolled SQLite back. The caller still
-	// owns its connection-mutex hold, which this terminal call consumes once.
+// Consumes one successful BEGIN even when SQLite already rolled the transaction back.
+@(private)
+rollback_owned_transaction :: proc(database: ^SQLite_DB) -> (err: Database_Error) {
+	defer sqlite3_mutex_leave(connection_mutex(database))
 	if database == nil || sqlite3_get_autocommit(database) == 0 {
-		if err := execute_sql_unlocked(database, "ROLLBACK;"); err.kind != .None {
-			log_error(err, "Could not roll back transaction")
+		err = execute_sql_unlocked(database, "ROLLBACK;")
+		if err.kind == .None && sqlite3_get_autocommit(database) == 0 {
+			err = make_error(.Execution_Failed, "ROLLBACK did not end the transaction", sqlite_code = .ERROR)
 		}
 	}
+	return
+}
 
-	sqlite3_mutex_leave(connection_mutex(database))
+rollback_transaction :: proc(database: ^SQLite_DB) {
+	if err := rollback_owned_transaction(database); err.kind != .None {
+		log_error(err, "Could not roll back transaction")
+	}
 }
 
 last_insert_rowid :: proc(database: ^SQLite_DB) -> i64 {
@@ -526,6 +562,18 @@ Database_Error :: struct {
 	subject:         [ERROR_SUBJECT_CAPACITY]u8,
 }
 
+@(private)
+copy_diagnostic :: proc(buffer: []u8, text: string) {
+	n := min(len(text), len(buffer) - 1)
+	if n < len(text) {
+		for n > 0 && !utf8.rune_start(text[n]) {
+			n -= 1
+		}
+	}
+	copy(buffer[:n], text[:n])
+	buffer[n] = 0
+}
+
 make_error :: proc(
 	kind: Database_Error_Kind,
 	message: string,
@@ -539,8 +587,8 @@ make_error :: proc(
 		allocator_error = allocator_error,
 	}
 
-	copy(err.message[:len(err.message) - 1], message)
-	copy(err.subject[:len(err.subject) - 1], subject)
+	copy_diagnostic(err.message[:], message)
+	copy_diagnostic(err.subject[:], subject)
 
 	return err
 }

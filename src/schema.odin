@@ -174,7 +174,7 @@ create_table :: proc(
 
 	err = execute_sql(database, sql)
 	if err.kind != .None {
-		copy(err.subject[:len(err.subject) - 1], schema.name)
+		copy_diagnostic(err.subject[:], schema.name)
 	}
 
 	// Error metadata must be attached before returning; defer observes a copy.
