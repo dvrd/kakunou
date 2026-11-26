@@ -73,6 +73,9 @@ foreign sqlite {
 	sqlite3_busy_timeout :: proc "c" (database: ^SQLite_DB, milliseconds: i32) -> SQLite_Result ---
 	sqlite3_changes :: proc "c" (database: ^SQLite_DB) -> i32 ---
 	sqlite3_db_mutex :: proc "c" (database: ^SQLite_DB) -> ^SQLite_Mutex ---
+	sqlite3_mutex_alloc :: proc "c" (kind: i32) -> ^SQLite_Mutex ---
+	sqlite3_mutex_try :: proc "c" (mutex: ^SQLite_Mutex) -> SQLite_Result ---
+	sqlite3_mutex_free :: proc "c" (mutex: ^SQLite_Mutex) ---
 	sqlite3_mutex_enter :: proc "c" (mutex: ^SQLite_Mutex) ---
 	sqlite3_mutex_leave :: proc "c" (mutex: ^SQLite_Mutex) ---
 
@@ -109,6 +112,7 @@ foreign sqlite {
 
 	sqlite3_exec :: proc "c" (database: ^SQLite_DB, sql: cstring, callback: proc "c" (data: rawptr, column_count: i32, values: [^]cstring, names: [^]cstring) -> SQLite_Result, data: rawptr, error_message: ^cstring) -> SQLite_Result ---
 
+	sqlite3_clear_bindings :: proc "c" (statement: ^SQLite_Statement) -> SQLite_Result ---
 	sqlite3_reset :: proc "c" (statement: ^SQLite_Statement) -> SQLite_Result ---
 
 	sqlite3_finalize :: proc "c" (statement: ^SQLite_Statement) -> SQLite_Result ---
@@ -120,13 +124,16 @@ foreign sqlite {
 	sqlite3_backup_finish :: proc "c" (backup: ^SQLite_Backup) -> SQLite_Result ---
 }
 
-// SQLite owns this recursive mutex for the lifetime of a FULLMUTEX connection.
-// A nil mutex is a no-op for SQLite's enter/leave routines, preserving nil-handle errors.
+// Raw connections and older SQLite runtimes retain their native mutex.
 connection_mutex :: proc(database: ^SQLite_DB) -> ^SQLite_Mutex {
-	if database == nil {
-		return nil
+	if database == nil do return nil
+	when #defined(client_data) {
+		if client_data.get != nil {
+			if mutex := client_data.get(database, client_mutex_key); mutex != nil {
+				return cast(^SQLite_Mutex)mutex
+			}
+		}
 	}
-
 	return sqlite3_db_mutex(database)
 }
 
@@ -155,10 +162,16 @@ open :: proc(database: ^^SQLite_DB, path: cstring) -> Database_Error {
 		nil,
 	)
 
-	mutex_missing := result == .OK && connection_mutex(database^) == nil
+	mutex_missing := result == .OK && sqlite3_db_mutex(database^) == nil
 
 	if result == .OK && !mutex_missing {
 		result = sqlite3_busy_timeout(database^, BUSY_TIMEOUT_MILLISECONDS)
+	}
+
+	when #defined(install_operation_mutex) {
+		if result == .OK && !mutex_missing {
+			result = install_operation_mutex(database^)
+		}
 	}
 
 	if result != .OK || mutex_missing {
@@ -525,18 +538,31 @@ query_one_row :: proc(
 		return false, error
 	}
 
+	found := step_query_one(database, statement, output, decode, &error)
+	return found, error
+}
+
+// After binding succeeds, a missing row leaves the caller's success result intact.
+@(private)
+step_query_one :: #force_inline proc(
+	database: ^SQLite_DB,
+	statement: ^SQLite_Statement,
+	output: ^$T,
+	decode: proc(statement: ^SQLite_Statement, output: ^T) -> Database_Error,
+	err: ^Database_Error,
+) -> bool {
 	result := sqlite3_step(statement)
 	if result == .DONE {
-		return false, {}
+		return false
 	}
 
 	if result != .ROW {
-		return false, sqlite_failure(database, result)
+		err^ = sqlite_failure(database, result)
+		return false
 	}
 
-	error = decode(statement, output)
-
-	return error.kind == .None, error
+	err^ = decode(statement, output)
+	return err.kind == .None
 }
 
 Database_Error_Kind :: enum {

@@ -74,16 +74,10 @@ column_int :: proc(
 	value: i64,
 	err: Database_Error,
 ) {
-	valid: bool
-	value, valid, err = column_int_optional(statement, column)
-	if err.kind != .None {
-		return
-	}
-	if !valid {
-		err = null_column(column)
-	}
-
-	return
+	integer, status, count := read_column_int(statement, column)
+	if status == .Present do return integer, {}
+	if status == .Null do return 0, null_column(column)
+	return 0, invalid_column_index(statement, column, count)
 }
 
 column_int_optional :: proc(
@@ -94,37 +88,44 @@ column_int_optional :: proc(
 	valid: bool,
 	err: Database_Error,
 ) {
-	if err = column_index(statement, column); err.kind != .None {
-		return
-	}
+	integer, status, count := read_column_int(statement, column)
+	if status == .Present do return integer, true, {}
+	if status == .Null do return 0, false, {}
+	return 0, false, invalid_column_index(statement, column, count)
+}
 
-	if sqlite3_column_type(statement, cast(i32)(column)) == .NULL {
-		return
-	}
+@(private)
+Integer_Column_State :: enum { Present, Null, Invalid_Index }
 
-	value = sqlite3_column_int64(statement, cast(i32)(column))
-	valid = true
+@(private)
+read_column_int :: proc(statement: ^SQLite_Statement, column: int) -> (value: i64, state: Integer_Column_State, column_count: int) {
+	count, in_range := column_bounds(statement, column)
+	if !in_range do return 0, .Invalid_Index, count
+	index := i32(column)
+	if sqlite3_column_type(statement, index) == .NULL do return 0, .Null, count
+	return sqlite3_column_int64(statement, index), .Present, count
+}
 
-	return
+@(private)
+column_bounds :: proc(statement: ^SQLite_Statement, column: int) -> (count: int, in_range: bool) {
+	if statement == nil do return 0, false
+	count = int(sqlite3_column_count(statement))
+	return count, column >= 0 && column < count
 }
 
 column_index :: proc(statement: ^SQLite_Statement, column: int) -> (err: Database_Error) {
+	count, in_range := column_bounds(statement, column)
+	if in_range do return {}
+	return invalid_column_index(statement, column, count)
+}
+
+@(private)
+invalid_column_index :: proc(statement: ^SQLite_Statement, column, count: int) -> (err: Database_Error) {
 	if statement == nil {
 		return make_error(.Execution_Failed, "SQL statement is required", sqlite_code = .MISUSE)
 	}
-
-	count := cast(int)(sqlite3_column_count(statement))
-
-	if column < 0 || column >= count {
-		err = make_error(.Execution_Failed, "", sqlite_code = .RANGE)
-		fmt.bprintf(
-			err.message[:len(err.message) - 1],
-			"SQL column %d is outside 0 ..< %d",
-			column,
-			count,
-		)
-	}
-
+	err = make_error(.Execution_Failed, "", sqlite_code = .RANGE)
+	fmt.bprintf(err.message[:len(err.message) - 1], "SQL column %d is outside 0 ..< %d", column, count)
 	return
 }
 
@@ -258,6 +259,11 @@ insert_statement :: proc(
 		return error
 	}
 
+	return step_insert(database, statement)
+}
+
+@(private)
+step_insert :: proc(database: ^SQLite_DB, statement: ^SQLite_Statement) -> Database_Error {
 	// Step reports SQLITE_ROW only after the write, and finalize then commits it.
 	if sqlite3_column_count(statement) != 0 {
 		return insert_returns_rows()
@@ -303,6 +309,7 @@ bind_values :: proc(
 	statement: ^SQLite_Statement,
 	parameters: []SQLite_Value,
 	err: ^Database_Error,
+	borrowed: ^bool = nil,
 ) -> bool {
 	for parameter, index in parameters {
 		result: SQLite_Result
@@ -324,6 +331,7 @@ bind_values :: proc(
 				data = raw_data(cast(string)"\x00")
 			}
 
+			if borrowed != nil do borrowed^ = true
 			result = sqlite3_bind_blob(
 				statement,
 				cast(i32)(index + 1),
@@ -334,6 +342,7 @@ bind_values :: proc(
 		case i64:
 			result = sqlite3_bind_int64(statement, cast(i32)(index + 1), value)
 		case cstring:
+			if borrowed != nil do borrowed^ = true
 			result = sqlite3_bind_text(statement, cast(i32)(index + 1), value, -1, nil)
 		case:
 			err^ = make_error(

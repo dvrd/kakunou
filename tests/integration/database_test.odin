@@ -714,3 +714,24 @@ database_second_connection_waits_for_a_write_lock :: proc(t: ^testing.T) {
 	testing.expect(t, state.err.kind == .None, "second connection writes after waiting")
 	test_database_count(t, holder, "SELECT COUNT(*) FROM items;", 2)
 }
+
+@(test)
+operation_mutex_survives_busy_close_and_raw_handles_keep_native_lock :: proc(t: ^testing.T) {
+	database: ^db.SQLite_DB
+	if !testing.expect_value(t, db.open(&database, ":memory:").kind, .None) do return
+	defer testing.expect_value(t, db.sqlite3_close(database), .OK)
+	mutex := db.connection_mutex(database)
+	statement, err := db.prepare(database, "SELECT 1", "empty query")
+	if !testing.expect_value(t, err.kind, .None) do return
+	defer db.sqlite3_finalize(statement)
+	testing.expect_value(t, db.sqlite3_close(database), .BUSY)
+	testing.expect_value(t, db.connection_mutex(database), mutex)
+	testing.expect_value(t, db.execute_sql(database, "SELECT 1").kind, .None)
+
+	external: ^db.SQLite_DB
+	flags :: db.SQLITE_OPEN_READWRITE | db.SQLITE_OPEN_CREATE | db.SQLITE_OPEN_FULLMUTEX
+	if !testing.expect_value(t, db.sqlite3_open_v2(":memory:", &external, flags, nil), .OK) do return
+	defer testing.expect_value(t, db.sqlite3_close(external), .OK)
+	testing.expect_value(t, db.connection_mutex(external), db.sqlite3_db_mutex(external))
+	testing.expect_value(t, db.execute_sql(external, "SELECT 1").kind, .None)
+}

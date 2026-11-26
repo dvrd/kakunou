@@ -302,7 +302,40 @@ backup_copy :: proc(source, destination: ^SQLite_DB) -> Database_Error {
 }
 
 @(private)
+try_backup_connection_lock :: proc(database: ^SQLite_DB) -> (^SQLite_Mutex, bool) {
+	if database == nil do return nil, true
+	// Client-data lookup enters SQLite's native mutex internally.
+	native := sqlite3_db_mutex(database)
+	if sqlite3_mutex_try(native) != .OK do return nil, false
+	mutex := connection_mutex(database)
+	if mutex == native do return mutex, true
+	acquired := sqlite3_mutex_try(mutex) == .OK
+	sqlite3_mutex_leave(native)
+	return mutex, acquired
+}
+
+@(private)
 backup_copy_with_timeout :: proc(source, destination: ^SQLite_DB, timeout: time.Duration) -> Database_Error {
+	lock_started := time.tick_now()
+	source_lock, destination_lock: ^SQLite_Mutex
+	// Either connection may already belong to a transaction. Never wait for
+	// the other handle while holding a lock acquired by this attempt.
+	for {
+		acquired: bool
+		source_lock, acquired = try_backup_connection_lock(source)
+		if acquired {
+			destination_lock, acquired = try_backup_connection_lock(destination)
+			if acquired do break
+			sqlite3_mutex_leave(source_lock)
+		}
+		if time.tick_since(lock_started) >= timeout {
+			return make_error(.Execution_Failed, "Backup connection is busy", sqlite_code = .BUSY)
+		}
+		time.sleep(time.Millisecond)
+	}
+	defer sqlite3_mutex_leave(source_lock)
+	defer sqlite3_mutex_leave(destination_lock)
+
 	backup := sqlite3_backup_init(destination, "main", source, "main")
 
 	if backup == nil {
@@ -315,7 +348,6 @@ backup_copy_with_timeout :: proc(source, destination: ^SQLite_DB, timeout: time.
 
 	result := SQLite_Result.BUSY
 	started := time.tick_now()
-
 	for time.tick_since(started) <= timeout {
 		result = sqlite3_backup_step(backup, BACKUP_PAGE_BATCH)
 		if result == .DONE do break

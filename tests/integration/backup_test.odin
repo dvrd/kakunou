@@ -7,6 +7,7 @@ import "core:fmt"
 import "core:mem"
 import "core:os"
 import "core:strings"
+import "core:sync"
 import "core:testing"
 import "core:thread"
 import "core:time"
@@ -251,4 +252,49 @@ concurrent_backup_preserves_first_completed_destination :: proc(t: ^testing.T) {
 	}
 	defer db.close(snapshot)
 	test_database_count(t, snapshot, "SELECT id FROM items", 2)
+}
+
+@(test)
+backup_timeout_covers_operation_and_native_locks :: proc(t: ^testing.T) {
+	database, ready := test_insert_database(t)
+	if !ready do return
+	defer db.close(database)
+
+	directory, directory_error := make_backup_fixture("kakunou-backup-locked-", context.temp_allocator)
+	if !testing.expect_value(t, directory_error, nil) do return
+	defer os.remove_all(directory)
+	Job :: struct {
+		source: ^db.SQLite_DB,
+		path: string,
+		err: db.Database_Error,
+		finished: sync.Sema,
+	}
+	run :: proc(data: rawptr) {
+		job := cast(^Job)data
+		job.err = db.backup_file_with_timeout(job.source, job.path, 50 * time.Millisecond)
+		sync.sema_post(&job.finished)
+	}
+	job := Job{source = database, path = fmt.tprintf("%s/snapshot.sqlite", directory)}
+	for transaction in ([2]bool{true, false}) {
+		native := db.sqlite3_db_mutex(database)
+		if transaction {
+			if !testing.expect_value(t, db.begin_read(database).kind, .None) do return
+		} else {
+			db.sqlite3_mutex_enter(native)
+		}
+		worker := thread.create_and_start_with_data(&job, run, runtime.default_context())
+		completed := worker != nil && sync.sema_wait_with_timeout(&job.finished, 2 * time.Second)
+		if transaction {
+			db.rollback_transaction(database)
+		} else {
+			db.sqlite3_mutex_leave(native)
+		}
+		if !testing.expect(t, worker != nil, "start backup worker") do return
+		thread.join(worker)
+		thread.destroy(worker)
+		testing.expect(t, completed, "backup times out while the mutex remains held")
+		testing.expect_value(t, job.err.sqlite_code, .BUSY)
+		testing.expect(t, !os.exists(job.path))
+	}
+	testing.expect_value(t, db.backup_file(database, job.path).kind, .None)
 }
