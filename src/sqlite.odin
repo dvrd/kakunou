@@ -123,20 +123,16 @@ foreign sqlite {
 	sqlite3_backup_finish :: proc "c" (backup: ^SQLite_Backup) -> SQLite_Result ---
 }
 
-@(private)
-operation_mutex :: proc(database: ^SQLite_DB) -> ^SQLite_Mutex {
-	when #defined(client_data) {
-		if database != nil && client_data.get != nil {
-			return cast(^SQLite_Mutex)client_data.get(database, client_mutex_key)
-		}
-	}
-	return nil
-}
-
 // Raw connections and older SQLite runtimes retain their native mutex.
 connection_mutex :: proc(database: ^SQLite_DB) -> ^SQLite_Mutex {
 	if database == nil do return nil
-	if mutex := operation_mutex(database); mutex != nil do return mutex
+	when #defined(client_data) {
+		if client_data.get != nil {
+			if mutex := client_data.get(database, client_mutex_key); mutex != nil {
+				return cast(^SQLite_Mutex)mutex
+			}
+		}
+	}
 	return sqlite3_db_mutex(database)
 }
 
